@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import csv
 import json
@@ -324,6 +324,22 @@ def engagement_score(tweet):
         score += 30
     return score
 
+def fmt_usd(value):
+    if value is None:
+        return "N/A"
+    try:
+        return f"${float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def fmt_pct(value):
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return "N/A"
 
 def check_coingecko_market_data(ticker_symbol):
     """Vérifie le market cap, volume, liquidité sur CoinGecko"""
@@ -340,7 +356,7 @@ def check_coingecko_market_data(ticker_symbol):
         if not coins:
             return None
 
-        coin = coins[0]
+        coin = next((c for c in coins if (c.get("symbol") or "").upper() == ticker_symbol.lstrip("$").upper()), coins[0])
         coin_id = coin.get("id")
         if not coin_id:
             return None
@@ -444,9 +460,9 @@ SOCIAL SIGNAL:
 - Narrative: {signal_data.get('narratives')}
 
 MARKET VALIDATION:
-- Market cap USD: ${signal_data.get('market_cap_usd', 'N/A'):,}
-- Volume 24h USD: ${signal_data.get('volume_24h_usd', 'N/A'):,}
-- Price change 24h: {signal_data.get('price_change_24h_percent', 'N/A')}%
+- Market cap USD: {fmt_usd(signal_data.get('market_cap_usd'))}
+- Volume 24h USD: {fmt_usd(signal_data.get('volume_24h_usd'))}
+- Price change 24h: {fmt_pct(signal_data.get('price_change_24h_percent'))}
 - Validation score: {market_validation.get('score')}/100
 - Risk flags: {', '.join(market_validation.get('flags', []))}
 - Risk level: {market_validation.get('risk_level')}
@@ -474,7 +490,8 @@ OUTPUT ONLY JSON (no other text):
             model=GPT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=500
+            max_tokens=500,
+            response_format={"type": "json_object"}
         )
 
         response_text = response.choices[0].message.content.strip()
@@ -756,7 +773,7 @@ def build_text_report(data):
     lines.append("-" * 80)
     lines.append("  Pipeline: Social signals → Market validation → GPT synthesis")
     lines.append("  Sentiment: Word boundaries regex (no false positives)")
-    lines.append("  Market validation: Honeypot detection, liquidity check")
+    lines.append("  Market validation: market cap, volume, liquidity and volatility risk checks")
     if USE_GPT_SYNTHESIS:
         lines.append(f"  GPT Model: {GPT_MODEL} with strict gem detection constraints")
     lines.append("  Constraints: Market cap > $500K, volume > 0, no extreme volatility")
@@ -864,3 +881,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
