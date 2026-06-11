@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION COMPLETE TWITTERAPI.IO + EMAIL LAPOSTE - 2026-06-11")
+print("VERSION V2 - CRYPTO X AGENT - FILTERED SIGNALS - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -21,7 +21,8 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
 EARLY_ALPHA = {
     "Ansem", "blknoiz06", "LarpVonTrier", "Poe_Ether",
-    "CrashiusClay69", "theunipcs", "HopiumPapi"
+    "CrashiusClay69", "theunipcs", "HopiumPapi",
+    "MandoCT", "SolBigBrain", "0xMert_", "sisyphus", "cobie"
 }
 
 ONCHAIN = {
@@ -32,15 +33,40 @@ ANTI_SCAM = {
     "zachxbt"
 }
 
+TRADERS = {
+    "BigCheds", "CryptoMichNL", "Sheldino_D", "AltcoinSherpa",
+    "HsakaTrades", "Pentosh1", "TheFlowHorse", "ByzGeneral",
+    "RunnerXBT", "MuroCrypto"
+}
+
 NARRATIVE_KEYWORDS = {
-    "AI / AI Agents": ["ai", "agent", "agents", "virtuals", "deai"],
-    "Memecoin": ["meme", "memecoin", "memecoins", "pump", "degen"],
-    "Solana": ["solana", "sol", "pumpfun", "jupiter"],
-    "Base": ["base", "brett", "toshi"],
+    "AI / AI Agents": ["ai", "agent", "agents", "virtuals", "deai", "autonomous"],
+    "Memecoin": ["meme", "memecoin", "memecoins", "pump", "degen", "degens"],
+    "Solana": ["solana", "sol", "pumpfun", "pump.fun", "jupiter", "bonk"],
+    "Base": ["base", "brett", "toshi", "buildonbase"],
     "RWA": ["rwa", "tokenization", "tokenized", "treasury", "ondo"],
     "DePIN": ["depin"],
-    "DeFi": ["defi", "yield", "perps", "dex"],
+    "DeFi": ["defi", "yield", "perps", "dex", "liquidity", "lending"],
     "Restaking": ["restaking", "eigen", "eigenlayer"],
+    "Gaming": ["gaming", "gamefi", "play-to-earn", "p2e"],
+}
+
+
+BLACKLIST_TICKERS = {
+    "$USD", "$USDT", "$USDC", "$BTC", "$ETH",
+    "$SPY", "$QQQ", "$DIA", "$IWM", "$VIX",
+    "$XAU", "$XAG", "$GOLD", "$SILVER", "$OIL",
+    "$ORCL", "$SMCI", "$CPB", "$TSLA", "$AAPL",
+    "$MSFT", "$GOOGL", "$GOOG", "$AMZN", "$META",
+    "$NVDA", "$NFLX", "$AMD", "$INTC", "$PLTR",
+    "$MSTR", "$COIN", "$HOOD", "$NKE", "$DIS",
+}
+
+KNOWN_LARGE_CAPS = {
+    "$SOL", "$BNB", "$XRP", "$DOGE", "$ADA", "$AVAX",
+    "$LINK", "$AAVE", "$SUI", "$TRX", "$XMR", "$ZEC",
+    "$NEAR", "$PEPE", "$SHIB", "$FLOKI", "$ARB", "$OP",
+    "$INJ", "$APT", "$DOT", "$LTC", "$BCH", "$TON",
 }
 
 
@@ -127,27 +153,63 @@ def fetch_latest_tweets(username, limit=20):
     return cleaned
 
 
+def deduplicate_tweets(tweets):
+    seen_ids = set()
+    seen_texts = set()
+    result = []
+
+    for tweet in tweets:
+        tweet_id = tweet.get("id")
+        text_key = tweet.get("text", "").strip()[:300]
+
+        if tweet_id and tweet_id in seen_ids:
+            continue
+
+        if text_key and text_key in seen_texts:
+            continue
+
+        if tweet_id:
+            seen_ids.add(tweet_id)
+
+        if text_key:
+            seen_texts.add(text_key)
+
+        result.append(tweet)
+
+    return result
+
+
 def extract_tickers(text):
-    tickers = re.findall(r"\$[A-Za-z]{2,10}", text)
+    tickers = re.findall(r"\$[A-Za-z0-9_]{2,12}", text)
+    clean = []
 
-blacklist = {
-    "$USD", "$USDT", "$USDC", "$BTC", "$ETH",
-    "$SPY", "$QQQ", "$DIA", "$IWM",
-    "$XAU", "$XAG", "$GOLD", "$SILVER",
-    "$ORCL", "$SMCI", "$CPB", "$TSLA", "$AAPL",
-    "$MSFT", "$GOOGL", "$AMZN", "$META", "$NVDA"
-}
+    for t in tickers:
+        t = t.upper()
 
-    return [t.upper() for t in tickers if t.upper() not in blacklist]
+        if t in BLACKLIST_TICKERS:
+            continue
+
+        clean.append(t)
+
+    return clean
+
+
+def is_ticker_list_tweet(text):
+    tickers = extract_tickers(text)
+    return len(tickers) >= 8
 
 
 def extract_contracts_and_links(text):
     evm_contracts = re.findall(r"0x[a-fA-F0-9]{40}", text)
+
+    # Solana-like contract addresses, rough detection
+    solana_contracts = re.findall(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text)
+
     dexscreener_links = re.findall(r"https?://(?:www\.)?dexscreener\.com/\S+", text)
     pumpfun_links = re.findall(r"https?://(?:www\.)?pump\.fun/\S+", text)
     geckoterminal_links = re.findall(r"https?://(?:www\.)?geckoterminal\.com/\S+", text)
 
-    return evm_contracts, dexscreener_links, pumpfun_links, geckoterminal_links
+    return evm_contracts, solana_contracts, dexscreener_links, pumpfun_links, geckoterminal_links
 
 
 def detect_narratives(text):
@@ -173,6 +235,8 @@ def engagement_score(tweet):
         score += 10
     if views and views > 100000:
         score += 20
+    if views and views > 500000:
+        score += 30
 
     return score
 
@@ -180,81 +244,129 @@ def engagement_score(tweet):
 def score_ticker(ticker, mentions):
     score = 0
     authors = {m["author"] for m in mentions}
+    author_count = len(authors)
+    mention_count = len(mentions)
 
-    score += min(len(authors) * 20, 60)
+    # Base : nombre d'auteurs indépendants
+    if author_count == 1:
+        score += 15
+    elif author_count == 2:
+        score += 40
+    elif author_count >= 3:
+        score += 65
+
+    # Mentions répétées
+    score += min(mention_count * 4, 20)
+
+    # Pénalité si gros coin connu et seulement 1 auteur
+    if ticker in KNOWN_LARGE_CAPS and author_count == 1:
+        score -= 25
 
     for m in mentions:
         author = m["author"]
 
         if author in EARLY_ALPHA:
-            score += 15
+            score += 12
 
         if author in ONCHAIN:
             score += 10
 
-        if m["contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]:
-            score += 15
+        if author in TRADERS:
+            score += 4
+
+        if m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]:
+            score += 20
 
         if author in ANTI_SCAM:
-            score -= 30
+            score -= 40
+
+        if m["is_list_tweet"]:
+            score -= 15
 
         if m["engagement"] > 50:
             score += 5
 
-        if m["engagement"] > 200:
+        if m["engagement"] > 250:
             score += 10
 
     return max(0, min(score, 100))
 
 
+def classify_ticker(ticker, mentions):
+    authors = {m["author"] for m in mentions}
+    has_contract = any(m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"] for m in mentions)
+
+    if ticker in KNOWN_LARGE_CAPS:
+        return "Large cap / coin connu"
+
+    if has_contract:
+        return "Possible nouveau gem / contrat détecté"
+
+    if len(authors) >= 2:
+        return "Ticker à surveiller"
+
+    return "Signal faible"
+
+
 def build_report(tweets):
+    tweets = deduplicate_tweets(tweets)
+
     ticker_mentions = defaultdict(list)
     narrative_counter = Counter()
     new_contracts = []
+    ignored_tickers = Counter()
 
     for tweet in tweets:
         text = tweet["text"]
 
         tickers = extract_tickers(text)
         narratives = detect_narratives(text)
-        contracts, dex_links, pump_links, gecko_links = extract_contracts_and_links(text)
+        contracts, sol_contracts, dex_links, pump_links, gecko_links = extract_contracts_and_links(text)
         engagement = engagement_score(tweet)
+        is_list = is_ticker_list_tweet(text)
 
         for n in narratives:
             narrative_counter[n] += 1
 
-        if contracts or dex_links or pump_links or gecko_links:
+        if contracts or sol_contracts or dex_links or pump_links or gecko_links:
             new_contracts.append({
                 "author": tweet["author"],
                 "contracts": contracts,
+                "sol_contracts": sol_contracts,
                 "dex_links": dex_links,
                 "pump_links": pump_links,
                 "gecko_links": gecko_links,
-                "text": text[:240],
+                "text": text[:260],
                 "url": tweet["url"]
             })
 
         for ticker in tickers:
+            if ticker in BLACKLIST_TICKERS:
+                ignored_tickers[ticker] += 1
+                continue
+
             ticker_mentions[ticker].append({
                 "author": tweet["author"],
-                "text": text[:240],
+                "text": text[:260],
                 "url": tweet["url"],
                 "contracts": contracts,
+                "sol_contracts": sol_contracts,
                 "dex_links": dex_links,
                 "pump_links": pump_links,
                 "gecko_links": gecko_links,
                 "engagement": engagement,
+                "is_list_tweet": is_list,
             })
 
     lines = []
-    lines.append("Crypto X Trend Report")
-    lines.append("=" * 60)
+    lines.append("Crypto X Trend Report V2")
+    lines.append("=" * 70)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
-    lines.append(f"Tweets analysés : {len(tweets)}")
+    lines.append(f"Tweets analysés après déduplication : {len(tweets)}")
     lines.append("")
 
     lines.append("TOP NARRATIVES")
-    lines.append("-" * 60)
+    lines.append("-" * 70)
 
     if narrative_counter:
         for narrative, count in narrative_counter.most_common(10):
@@ -263,8 +375,8 @@ def build_report(tweets):
         lines.append("Aucune narrative forte détectée.")
 
     lines.append("")
-    lines.append("TOP TICKERS")
-    lines.append("-" * 60)
+    lines.append("TOP SIGNAUX TICKERS")
+    lines.append("-" * 70)
 
     if ticker_mentions:
         ranked = []
@@ -276,30 +388,37 @@ def build_report(tweets):
 
         for ticker, score, mentions in ranked[:20]:
             authors = sorted({m["author"] for m in mentions})
+            classification = classify_ticker(ticker, mentions)
+
             lines.append(
-                f"{ticker} — Score {score}/100 — "
-                f"{len(mentions)} mentions — Comptes: {', '.join('@' + a for a in authors)}"
+                f"{ticker} — Score {score}/100 — {classification} — "
+                f"{len(mentions)} mentions — {len(authors)} comptes: "
+                f"{', '.join('@' + a for a in authors)}"
             )
 
             for m in mentions[:3]:
-                lines.append(f"  • @{m['author']}: {m['text']}")
+                flag = " [LISTE DE TICKERS]" if m["is_list_tweet"] else ""
+                lines.append(f"  • @{m['author']}{flag}: {m['text']}")
                 if m["url"]:
                     lines.append(f"    {m['url']}")
 
             lines.append("")
     else:
-        lines.append("Aucun cashtag détecté.")
+        lines.append("Aucun cashtag crypto détecté.")
 
     lines.append("")
-    lines.append("CONTRATS / LIENS DEX / PUMPFUN DETECTES")
-    lines.append("-" * 60)
+    lines.append("NOUVEAUX CONTRATS / LIENS DEX / PUMPFUN")
+    lines.append("-" * 70)
 
     if new_contracts:
         for item in new_contracts[:15]:
             lines.append(f"@{item['author']}: {item['text']}")
 
             if item["contracts"]:
-                lines.append(f"  Contrats: {', '.join(item['contracts'])}")
+                lines.append(f"  Contrats EVM: {', '.join(item['contracts'])}")
+
+            if item["sol_contracts"]:
+                lines.append(f"  Contrats Solana possibles: {', '.join(item['sol_contracts'][:3])}")
 
             if item["dex_links"]:
                 lines.append(f"  DexScreener: {', '.join(item['dex_links'])}")
@@ -318,19 +437,50 @@ def build_report(tweets):
         lines.append("Aucun contrat ou lien DEX/Pump.fun détecté.")
 
     lines.append("")
-    lines.append("RESUME")
-    lines.append("-" * 60)
+    lines.append("RESUME ACTIONNABLE")
+    lines.append("-" * 70)
 
     if ticker_mentions:
-        lines.append("Des tickers ont été détectés. Les plus intéressants sont ceux mentionnés par plusieurs comptes indépendants.")
+        strong = []
+        watch = []
+
+        for ticker, mentions in ticker_mentions.items():
+            s = score_ticker(ticker, mentions)
+            c = classify_ticker(ticker, mentions)
+
+            if s >= 70:
+                strong.append((ticker, s, c))
+            elif s >= 40:
+                watch.append((ticker, s, c))
+
+        if strong:
+            lines.append("Signaux forts :")
+            for ticker, s, c in sorted(strong, key=lambda x: x[1], reverse=True):
+                lines.append(f"- {ticker}: {s}/100 — {c}")
+        else:
+            lines.append("Aucun signal ticker vraiment fort.")
+
+        if watch:
+            lines.append("")
+            lines.append("À surveiller :")
+            for ticker, s, c in sorted(watch, key=lambda x: x[1], reverse=True)[:10]:
+                lines.append(f"- {ticker}: {s}/100 — {c}")
     else:
-        lines.append("Aucun ticker crypto détecté dans cette fenêtre.")
+        lines.append("Aucun ticker exploitable détecté.")
 
     if narrative_counter:
         top_narrative = narrative_counter.most_common(1)[0][0]
+        lines.append("")
         lines.append(f"Narrative dominante actuelle : {top_narrative}.")
     else:
+        lines.append("")
         lines.append("Aucune narrative dominante claire.")
+
+    lines.append("")
+    lines.append("NOTE")
+    lines.append("-" * 70)
+    lines.append("Un score élevé n'est pas un signal d'achat automatique.")
+    lines.append("Vérifier prix, volume, liquidité, contrat et risque de rug avant toute décision.")
 
     return "\n".join(lines)
 
@@ -376,7 +526,7 @@ def main():
     print(report)
     print("=" * 80)
 
-    send_email("Crypto X Trend Report", report)
+    send_email("Crypto X Trend Report V2", report)
     print("Email envoyé.")
 
 
