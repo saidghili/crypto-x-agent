@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION V4 - CRYPTO X AGENT - IGNORE TICKER LISTS - 2026-06-11")
+print("VERSION V5 - CRYPTO X AGENT - TIERED SORSA WEIGHTING - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -19,24 +19,20 @@ SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.laposte.net")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
 
-EARLY_ALPHA = {
-    "Ansem", "blknoiz06", "LarpVonTrier", "Poe_Ether",
-    "CrashiusClay69", "theunipcs", "HopiumPapi",
-    "MandoCT", "SolBigBrain", "0xMert_", "sisyphus", "cobie"
+TIER_1 = {
+    "cobie", "zachxbt", "CryptoHayes", "jessepollak",
+    "blknoiz06", "HsakaTrades", "CL207", "Pentosh1"
 }
 
-ONCHAIN = {
-    "lookonchain", "ArkhamIntel", "nansen_ai", "DefiLlama", "ScopeProtocol"
+TIER_2 = {
+    "DegenSpartan", "nansen_ai", "0xngmi", "lookonchain",
+    "MilesDeutscher", "SolBigBrain", "weremeow", "Virtuals_io",
+    "DefiLlama", "DefiIgnas", "TheFlowHorse", "Route2FI", "theunipcs"
 }
 
-ANTI_SCAM = {
-    "zachxbt"
-}
-
-TRADERS = {
-    "BigCheds", "CryptoMichNL", "Sheldino_D", "AltcoinSherpa",
-    "HsakaTrades", "Pentosh1", "TheFlowHorse", "ByzGeneral",
-    "RunnerXBT", "MuroCrypto"
+TIER_3 = {
+    "CryptoMichNL", "CrashiusClay69", "BigCheds",
+    "AltcoinSherpa", "Austin_Federa", "ByzGeneral"
 }
 
 NARRATIVE_KEYWORDS = {
@@ -72,6 +68,28 @@ KNOWN_LARGE_CAPS = {
     "$ONDO", "$PENDLE", "$SEI", "$TIA", "$JUP", "$WIF",
     "$BONK"
 }
+
+
+def get_author_tier(author):
+    if author in TIER_1:
+        return 1
+    elif author in TIER_2:
+        return 2
+    elif author in TIER_3:
+        return 3
+    else:
+        return 0
+
+
+def get_tier_multiplier(tier):
+    if tier == 1:
+        return 3.0
+    elif tier == 2:
+        return 2.0
+    elif tier == 3:
+        return 1.0
+    else:
+        return 0.0
 
 
 def load_accounts(path="accounts.txt"):
@@ -267,29 +285,34 @@ def score_ticker(ticker, mentions):
     if ticker in KNOWN_LARGE_CAPS and author_count == 1:
         score -= 25
 
+    tier_weighted_points = 0
+
     for m in mentions:
         author = m["author"]
+        author_tier = get_author_tier(author)
+        tier_multiplier = get_tier_multiplier(author_tier)
 
-        if author in EARLY_ALPHA:
-            score += 12
+        base_author_score = 0
 
-        if author in ONCHAIN:
-            score += 10
-
-        if author in TRADERS:
-            score += 4
+        if author_tier == 1:
+            base_author_score += 15
+        elif author_tier == 2:
+            base_author_score += 10
+        elif author_tier == 3:
+            base_author_score += 5
 
         if m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]:
-            score += 20
-
-        if author in ANTI_SCAM:
-            score -= 40
+            base_author_score += 20
 
         if m["engagement"] > 50:
-            score += 5
+            base_author_score += 5
 
         if m["engagement"] > 250:
-            score += 10
+            base_author_score += 10
+
+        tier_weighted_points += base_author_score * tier_multiplier
+
+    score += min(tier_weighted_points / 2, 35)
 
     if author_count == 1:
         score = min(score, 55)
@@ -402,11 +425,12 @@ def build_report(tweets):
     ]
 
     lines = []
-    lines.append("Crypto X Trend Report V4")
+    lines.append("Crypto X Trend Report V5 - TIERED SORSA WEIGHTING")
     lines.append("=" * 70)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Tweets analysés après déduplication : {len(tweets)}")
     lines.append(f"Tweets ignorés car listes de tickers : {ignored_list_tweets}")
+    lines.append(f"Comptes actifs : Tier 1 (8) + Tier 2 (13) + Tier 3 (6) = 27 total")
     lines.append("")
 
     lines.append("TOP NARRATIVES")
@@ -533,8 +557,11 @@ def build_report(tweets):
         lines.append("Aucune narrative dominante claire.")
 
     lines.append("")
-    lines.append("NOTE")
+    lines.append("NOTES TECHNIQUES V5")
     lines.append("-" * 70)
+    lines.append("Tier 1 (8 comptes, 3x multiplier): cobie, zachxbt, CryptoHayes, jessepollak, blknoiz06, HsakaTrades, CL207, Pentosh1")
+    lines.append("Tier 2 (13 comptes, 2x multiplier): DegenSpartan, nansen_ai, 0xngmi, lookonchain, MilesDeutscher, SolBigBrain, weremeow, Virtuals_io, DefiLlama, DefiIgnas, TheFlowHorse, Route2FI, theunipcs")
+    lines.append("Tier 3 (6 comptes, 1x multiplier): CryptoMichNL, CrashiusClay69, BigCheds, AltcoinSherpa, Austin_Federa, ByzGeneral")
     lines.append("Un score élevé n'est pas un signal d'achat automatique.")
     lines.append("Vérifier prix, volume, liquidité, contrat et risque de rug avant toute décision.")
 
@@ -582,7 +609,7 @@ def main():
     print(report)
     print("=" * 80)
 
-    send_email("Crypto X Trend Report V4", report)
+    send_email("Crypto X Trend Report V5 - Tiered Sorsa Weighting", report)
     print("Email envoyé.")
 
 
