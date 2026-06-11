@@ -42,16 +42,19 @@ ANTI_SCAM_ACCOUNTS = {
 POSITIVE_KEYWORDS = {
     "bullish", "accumulate", "loading", "buy", "buying", "strong", "upside",
     "breakout", "support", "holding", "long", "pump", "moon", "gem", "alpha",
-    "early", "opportunity", "entry", "dip", "accumulation", "long", "going higher",
-    "outperform", "undervalued", "setup", "catalysts", "soon"
+    "early", "opportunity", "entry", "dip", "accumulation", "going higher",
+    "outperform", "undervalued", "setup", "catalysts", "soon", "loaded", "cheap",
+    "reversal", "confirmation", "strength", "bullish momentum", "oversold", "bounce",
+    "recovery", "rally", "gaining", "momentum", "positive"
 }
 
 NEGATIVE_KEYWORDS = {
-    "bearish", "dump", "dumped", "sold", "selling", "exit", "exited", "rug", "scam",
-    "fraud", "suspicious", "down", "crash", "loss", "short", "trap", "avoid", "danger",
-    "risk", "wrong direction", "out", "red flag", "warning", "beware", "caution",
-    "manipulation", "exploit", "hack", "loss", "exposed", "negative", "concern",
-    "worried", "scared", "liquidated", "rekt", "collapse", "failed", "dead"
+    "bearish", "sold", "selling", "exit", "exited", "rug", "scam",
+    "fraud", "suspicious", "crash", "trap", "avoid", "danger",
+    "wrong direction", "out", "red flag", "warning", "beware", "caution",
+    "manipulation", "exploit", "hack", "exposed", "negative", "concern",
+    "liquidated", "rekt", "collapse", "failed", "dead", "exploit", "hack",
+    "untrustworthy", "malicious", "attack", "vulnerable", "breach"
 }
 
 NARRATIVE_KEYWORDS = {
@@ -116,6 +119,38 @@ def analyze_sentiment(text):
     
     positive_count = sum(1 for word in POSITIVE_KEYWORDS if word in text_lower)
     negative_count = sum(1 for word in NEGATIVE_KEYWORDS if word in text_lower)
+    
+    patterns_bullish = [
+        "buying the dip",
+        "loaded on the",
+        "accumulating on",
+        "stacking on",
+        "buying the dump",
+        "loading up",
+        "accumulation zone",
+        "buying pressure",
+        "support bounce",
+        "oversold bounce",
+        "cheap entry"
+    ]
+    
+    patterns_bearish = [
+        "exit position",
+        "sold out",
+        "leaving position",
+        "warning sign",
+        "be careful",
+        "stay away",
+        "do not buy"
+    ]
+    
+    for pattern in patterns_bullish:
+        if pattern in text_lower:
+            positive_count += 2
+    
+    for pattern in patterns_bearish:
+        if pattern in text_lower:
+            negative_count += 2
     
     if positive_count + negative_count == 0:
         return 0.0
@@ -401,12 +436,12 @@ def is_new_gem_candidate(ticker, mentions, score):
 def is_red_flag(ticker, mentions, score):
     avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions) if mentions else 0
 
-    if avg_sentiment < -0.3:
+    if avg_sentiment < -0.4:
         return True
 
     for m in mentions:
         author = m["author"]
-        if author in ANTI_SCAM_ACCOUNTS and m["sentiment"] < 0:
+        if author in ANTI_SCAM_ACCOUNTS and m["sentiment"] < -0.2:
             return True
 
     return False
