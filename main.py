@@ -1,13 +1,22 @@
 import os
 import re
+import smtplib
 import requests
 from datetime import datetime, timezone
 from collections import defaultdict, Counter
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION PROPRE TWITTERAPI.IO - SANS EMAIL - 2026-06-11")
+print("VERSION COMPLETE TWITTERAPI.IO + EMAIL LAPOSTE - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
+
+EMAIL_FROM = os.getenv("EMAIL_FROM")
+EMAIL_TO = os.getenv("EMAIL_TO")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.laposte.net")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
 
 EARLY_ALPHA = {
@@ -79,13 +88,6 @@ def fetch_latest_tweets(username, limit=20):
 
     tweets = []
 
-    # Format TwitterAPI.io confirmé :
-    # {
-    #   "status": "success",
-    #   "data": {
-    #       "tweets": [...]
-    #   }
-    # }
     if (
         isinstance(data, dict)
         and "data" in data
@@ -175,7 +177,6 @@ def score_ticker(ticker, mentions):
     score = 0
     authors = {m["author"] for m in mentions}
 
-    # Plusieurs comptes différents
     score += min(len(authors) * 20, 60)
 
     for m in mentions:
@@ -206,7 +207,6 @@ def build_report(tweets):
     ticker_mentions = defaultdict(list)
     narrative_counter = Counter()
     new_contracts = []
-    all_links = []
 
     for tweet in tweets:
         text = tweet["text"]
@@ -229,9 +229,6 @@ def build_report(tweets):
                 "text": text[:240],
                 "url": tweet["url"]
             })
-
-        for link in dex_links + pump_links + gecko_links:
-            all_links.append((tweet["author"], link, tweet["url"]))
 
         for ticker in tickers:
             ticker_mentions[ticker].append({
@@ -334,6 +331,27 @@ def build_report(tweets):
     return "\n".join(lines)
 
 
+def send_email(subject, body):
+    if not all([EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT]):
+        raise ValueError("Secrets email manquants")
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_FROM
+    msg["To"] = EMAIL_TO
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+            server.login(EMAIL_FROM, EMAIL_PASSWORD)
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_FROM, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+
 def main():
     if not TWITTERAPI_KEY:
         raise ValueError("TWITTERAPI_KEY manquant dans les secrets GitHub")
@@ -354,8 +372,8 @@ def main():
     print(report)
     print("=" * 80)
 
-    print("EMAIL DESACTIVE TEMPORAIREMENT")
-    print("Si les tweets sont bien récupérés, prochaine étape : réactiver l'envoi email.")
+    send_email("Crypto X Trend Report", report)
+    print("Email envoyé.")
 
 
 if __name__ == "__main__":
