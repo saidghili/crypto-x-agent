@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION V3 - CRYPTO X AGENT - CLEAN TICKERS + NEW GEMS - 2026-06-11")
+print("VERSION V4 - CRYPTO X AGENT - IGNORE TICKER LISTS - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -190,17 +190,10 @@ def extract_tickers(text):
     for ticker in raw:
         ticker = ticker.upper()
 
-        # Supprimer les montants : $64, $100, $4000
         if re.fullmatch(r"\$[0-9]+", ticker):
             continue
 
-        # Supprimer les montants : $64K, $75K, $40B, $30M
         if re.fullmatch(r"\$[0-9]+[KMB]", ticker):
-            continue
-
-        # Supprimer les montants décimaux potentiels : $63.3K ne sera normalement pas capté,
-        # mais on garde une sécurité simple.
-        if re.fullmatch(r"\$[0-9]+_[0-9]+", ticker):
             continue
 
         if ticker in BLACKLIST_TICKERS:
@@ -218,7 +211,6 @@ def is_ticker_list_tweet(text):
 
 def extract_contracts_and_links(text):
     evm_contracts = re.findall(r"0x[a-fA-F0-9]{40}", text)
-
     solana_contracts = re.findall(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text)
 
     dexscreener_links = re.findall(r"https?://(?:www\.)?dexscreener\.com/\S+", text)
@@ -293,16 +285,12 @@ def score_ticker(ticker, mentions):
         if author in ANTI_SCAM:
             score -= 40
 
-        if m["is_list_tweet"]:
-            score -= 15
-
         if m["engagement"] > 50:
             score += 5
 
         if m["engagement"] > 250:
             score += 10
 
-    # règle importante : un seul compte ne peut pas donner un score énorme
     if author_count == 1:
         score = min(score, 55)
 
@@ -357,11 +345,11 @@ def build_report(tweets):
     ticker_mentions = defaultdict(list)
     narrative_counter = Counter()
     new_contracts = []
+    ignored_list_tweets = 0
 
     for tweet in tweets:
         text = tweet["text"]
 
-        tickers = extract_tickers(text)
         narratives = detect_narratives(text)
         contracts, sol_contracts, dex_links, pump_links, gecko_links = extract_contracts_and_links(text)
         engagement = engagement_score(tweet)
@@ -382,6 +370,12 @@ def build_report(tweets):
                 "url": tweet["url"]
             })
 
+        if is_list:
+            ignored_list_tweets += 1
+            continue
+
+        tickers = extract_tickers(text)
+
         for ticker in tickers:
             ticker_mentions[ticker].append({
                 "author": tweet["author"],
@@ -393,7 +387,6 @@ def build_report(tweets):
                 "pump_links": pump_links,
                 "gecko_links": gecko_links,
                 "engagement": engagement,
-                "is_list_tweet": is_list,
             })
 
     ranked = []
@@ -409,10 +402,11 @@ def build_report(tweets):
     ]
 
     lines = []
-    lines.append("Crypto X Trend Report V3")
+    lines.append("Crypto X Trend Report V4")
     lines.append("=" * 70)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Tweets analysés après déduplication : {len(tweets)}")
+    lines.append(f"Tweets ignorés car listes de tickers : {ignored_list_tweets}")
     lines.append("")
 
     lines.append("TOP NARRATIVES")
@@ -440,8 +434,7 @@ def build_report(tweets):
             )
 
             for m in mentions[:3]:
-                flag = " [LISTE DE TICKERS]" if m["is_list_tweet"] else ""
-                lines.append(f"  • @{m['author']}{flag}: {m['text']}")
+                lines.append(f"  • @{m['author']}: {m['text']}")
                 if m["url"]:
                     lines.append(f"    {m['url']}")
 
@@ -465,8 +458,7 @@ def build_report(tweets):
             )
 
             for m in mentions[:3]:
-                flag = " [LISTE DE TICKERS]" if m["is_list_tweet"] else ""
-                lines.append(f"  • @{m['author']}{flag}: {m['text']}")
+                lines.append(f"  • @{m['author']}: {m['text']}")
                 if m["url"]:
                     lines.append(f"    {m['url']}")
 
@@ -590,7 +582,7 @@ def main():
     print(report)
     print("=" * 80)
 
-    send_email("Crypto X Trend Report V3", report)
+    send_email("Crypto X Trend Report V4", report)
     print("Email envoyé.")
 
 
