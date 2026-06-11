@@ -9,7 +9,7 @@ from collections import defaultdict, Counter
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-print("VERSION V8 - CRYPTO X AGENT - NARRATIVES + BLACKLIST + CATEGORIES STRICTES")
+print("VERSION V8.2 - CRYPTO X AGENT - PRODUCTION READY")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -21,7 +21,7 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "reports")
 MAX_TWEETS_PER_ACCOUNT = int(os.getenv("MAX_TWEETS_PER_ACCOUNT", "20"))
-SEND_EMAIL_REPORT = os.getenv("SEND_EMAIL_REPORT", "true").lower() == "true"
+SEND_EMAIL_REPORT = os.getenv("SEND_EMAIL_REPORT", "false").lower() == "true"
 
 TIER_1 = {x.lower() for x in {
     "cobie", "zachxbt", "CryptoHayes", "jessepollak",
@@ -140,10 +140,18 @@ def is_promotional_tweet(text):
 
 
 def analyze_sentiment(text):
-    """Analyse sentiment avec contexte pour tweets promotionnels"""
+    """Analyse sentiment avec word boundaries regex pour éviter les faux positifs"""
     text_lower = (text or "").lower()
-    positive_count = sum(1 for word in POSITIVE_KEYWORDS if word in text_lower)
-    negative_count = sum(1 for word in NEGATIVE_KEYWORDS if word in text_lower)
+    positive_count = 0
+    negative_count = 0
+
+    for word in POSITIVE_KEYWORDS:
+        if re.search(rf'\b{re.escape(word)}\b', text_lower):
+            positive_count += 1
+
+    for word in NEGATIVE_KEYWORDS:
+        if re.search(rf'\b{re.escape(word)}\b', text_lower):
+            negative_count += 1
 
     for pattern in BULLISH_PATTERNS:
         if pattern in text_lower:
@@ -307,11 +315,67 @@ def engagement_score(tweet):
     return score
 
 
+def check_coingecko_market_data(ticker_symbol):
+    """Vérifie le market cap, volume, liquidité sur CoinGecko. Retourne None si pas trouvé."""
+    try:
+        ticker_clean = ticker_symbol.lstrip("$").lower()
+        url = "https://api.coingecko.com/api/v3/search"
+        params = {"query": ticker_clean}
+        r = requests.get(url, params=params, timeout=5)
+        if r.status_code != 200:
+            return None
+
+        data = r.json()
+        coins = data.get("coins", [])
+        if not coins:
+            return None
+
+        coin = coins[0]
+        coin_id = coin.get("id")
+        if not coin_id:
+            return None
+
+        market_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}"
+        market_params = {
+            "localization": "false",
+            "tickers": "false",
+            "market_data": "true",
+            "community_data": "false",
+            "developer_data": "false"
+        }
+        r2 = requests.get(market_url, params=market_params, timeout=5)
+        if r2.status_code != 200:
+            return None
+
+        market_data = r2.json()
+        return {
+            "name": market_data.get("name"),
+            "symbol": market_data.get("symbol", "").upper(),
+            "market_cap_usd": market_data.get("market_data", {}).get("market_cap", {}).get("usd"),
+            "volume_24h_usd": market_data.get("market_data", {}).get("total_volume", {}).get("usd"),
+            "circulating_supply": market_data.get("market_data", {}).get("circulating_supply"),
+            "ath_usd": market_data.get("market_data", {}).get("ath", {}).get("usd"),
+            "atl_usd": market_data.get("market_data", {}).get("atl", {}).get("usd"),
+            "price_change_24h_percent": market_data.get("market_data", {}).get("price_change_percentage_24h"),
+        }
+    except Exception as e:
+        print(f"COINGECKO ERROR {ticker_symbol}: {e}")
+        return None
+
+
 def score_ticker(ticker, mentions):
     authors = {m["author"] for m in mentions}
     author_count = len(authors)
     mention_count = len(mentions)
     avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
+
+    mention_counts_by_author = Counter(m["author"] for m in mentions)
+    max_mentions_single_author = max(mention_counts_by_author.values()) if mention_counts_by_author else 1
+
+    if author_count == 1 and max_mentions_single_author > 2:
+        risk_penalty_spam = min(15, max_mentions_single_author * 3)
+    else:
+        risk_penalty_spam = 0
 
     consensus_score = 15 if author_count == 1 else 40 if author_count == 2 else 65
     mention_score = min(mention_count * 4, 20)
@@ -337,7 +401,7 @@ def score_ticker(ticker, mentions):
 
     sentiment_factor = max(-0.5, min(1.0, avg_sentiment))
     raw = consensus_score + mention_score + min(tier_score / 2, 30) + min(contract_bonus, 25) + min(engagement_bonus, 15)
-    raw = raw * (1 + max(0, sentiment_factor) * 0.35) - risk_penalty
+    raw = raw * (1 + max(0, sentiment_factor) * 0.35) - risk_penalty - risk_penalty_spam
 
     if author_count == 1:
         tier_1_author = any(get_author_tier(a) == 1 for a in authors)
@@ -426,6 +490,9 @@ def build_report_data(tweets):
         avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
         authors = sorted({m["author"] for m in mentions})
         signal_type = classify_signal(ticker, mentions, score, avg_sentiment)
+        
+        gecko_data = check_coingecko_market_data(ticker)
+
         ranked.append({
             "ticker": ticker,
             "score": score,
@@ -434,6 +501,7 @@ def build_report_data(tweets):
             "author_count": len(authors),
             "authors": authors,
             "signal_type": signal_type,
+            "market_data": gecko_data,
             "mentions": mentions,
         })
 
@@ -460,7 +528,7 @@ def build_report_data(tweets):
 
 def build_text_report(data):
     lines = []
-    lines.append("Crypto X Trend Report V8 - Narratives + Blacklist Strict + Categories")
+    lines.append("Crypto X Trend Report V8.2 - Production Ready")
     lines.append("=" * 80)
     lines.append(f"Date UTC : {data['generated_at_utc']}")
     lines.append(f"Tweets analysés après déduplication : {data['tweets_analyzed']}")
@@ -485,6 +553,9 @@ def build_text_report(data):
                 f"{r['mention_count']} mentions — {r['author_count']} comptes: "
                 f"{', '.join('@' + a for a in r['authors'])}"
             )
+            if r["market_data"]:
+                mc = r["market_data"]
+                lines.append(f"    Market: ${mc.get('market_cap_usd', 'N/A'):,} | Vol24h: ${mc.get('volume_24h_usd', 'N/A'):,}")
             for m in r["mentions"][:2]:
                 lines.append(f"    @{m['author']}: {m['text']}")
                 lines.append(f"    {m['url']}")
@@ -502,6 +573,9 @@ def build_text_report(data):
                 f"{r['mention_count']} mentions — {r['author_count']} comptes: "
                 f"{', '.join('@' + a for a in r['authors'])}"
             )
+            if r["market_data"]:
+                mc = r["market_data"]
+                lines.append(f"    Market: ${mc.get('market_cap_usd', 'N/A'):,} | Vol24h: ${mc.get('volume_24h_usd', 'N/A'):,}")
             lines.append(f"    Statut: À surveiller, vérifier techniquement avant entrée")
         lines.append("")
     else:
@@ -539,13 +613,15 @@ def build_text_report(data):
         lines.append("  Aucun contrat ou lien DEX détecté.")
     lines.append("")
 
-    lines.append("NOTES TECHNIQUES V8")
+    lines.append("NOTES TECHNIQUES V8.2")
     lines.append("-" * 80)
-    lines.append("  Narratives détectées avec word boundaries (\\b) pour éliminer le bruit")
+    lines.append("  Narratives + Sentiment avec word boundaries (\\b) pour éliminer le bruit")
     lines.append("  Blacklist enrichie: indices boursiers, actions, ETF, lettres seules")
-    lines.append("  Sentiment: plus nuancé pour tweets promotionnels, moins de faux positifs")
+    lines.append("  CoinGecko market data: market cap, volume 24h inclus pour context")
     lines.append("  Catégories: Strong buy (70+, strict), Watchlist (60+, à vérifier), Red flags (vrais signaux négatifs)")
     lines.append("  Score plafonné à 45 pour single-account sauf Tier1 + contrat (plafonné 65)")
+    lines.append("  Malus pour mentions répétées du même auteur (anti-spam)")
+    lines.append("  Email optionnel, false par défaut, ne plante pas si config manquante")
     lines.append("  Ce rapport n'est pas un conseil: détecte les signaux sociaux uniquement.")
     return "\n".join(lines)
 
@@ -553,9 +629,9 @@ def build_text_report(data):
 def save_outputs(data, report):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v8_{stamp}.txt")
-    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v8_{stamp}.json")
-    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v8_{stamp}.csv")
+    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.txt")
+    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.json")
+    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v82_{stamp}.csv")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(report)
@@ -565,35 +641,51 @@ def save_outputs(data, report):
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ticker", "score", "sentiment", "mentions", "author_count", "signal_type", "authors"])
+        writer.writerow([
+            "ticker", "score", "sentiment", "mentions", "author_count", "signal_type", 
+            "authors", "market_cap_usd", "volume_24h_usd", "price_change_24h_pct"
+        ])
         for r in data["ranked"]:
+            market_cap = r["market_data"].get("market_cap_usd") if r["market_data"] else None
+            volume = r["market_data"].get("volume_24h_usd") if r["market_data"] else None
+            price_change = r["market_data"].get("price_change_24h_percent") if r["market_data"] else None
             writer.writerow([
                 r["ticker"], r["score"], r["avg_sentiment"], r["mention_count"],
-                r["author_count"], r["signal_type"], ", ".join(r["authors"])
+                r["author_count"], r["signal_type"], ", ".join(r["authors"]),
+                market_cap, volume, price_change
             ])
 
     return txt_path, json_path, csv_path
 
 
 def send_email(subject, body):
+    """Envoie email mais ne plante pas le script si ça échoue"""
     if not all([EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT]):
-        raise ValueError("Secrets email manquants")
+        print("EMAIL CONFIG INCOMPLETE: Email sending skipped. Set EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT to send.")
+        return False
 
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_FROM
+        msg["To"] = EMAIL_TO
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    if SMTP_PORT == 465:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(EMAIL_FROM, EMAIL_PASSWORD)
-            server.send_message(msg)
-    else:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_FROM, EMAIL_PASSWORD)
-            server.send_message(msg)
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+                server.login(EMAIL_FROM, EMAIL_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(EMAIL_FROM, EMAIL_PASSWORD)
+                server.send_message(msg)
+        print("EMAIL SENT SUCCESSFULLY")
+        return True
+    except Exception as e:
+        print(f"EMAIL SEND FAILED: {e}")
+        print("Report was generated successfully. You can find it in the reports/ directory.")
+        return False
 
 
 def main():
@@ -622,10 +714,9 @@ def main():
     print(f"  CSV: {csv_path}")
 
     if SEND_EMAIL_REPORT:
-        send_email("Crypto X Trend Report V8", report)
-        print("Email envoyé.")
+        send_email("Crypto X Trend Report V8.2", report)
     else:
-        print("Envoi email désactivé: SEND_EMAIL_REPORT=false")
+        print("Email non activé: SEND_EMAIL_REPORT=false. Rapports sauvegardés localement.")
 
 
 if __name__ == "__main__":
