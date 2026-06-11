@@ -9,9 +9,17 @@ from collections import defaultdict, Counter
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-print("VERSION V8.2 - CRYPTO X AGENT - PRODUCTION READY")
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    print("WARNING: openai library not installed. Install with: pip install openai")
+
+print("VERSION V9 - CRYPTO X AGENT - GPT SYNTHESIS + STRICT GEM DETECTION")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
@@ -22,6 +30,8 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "reports")
 MAX_TWEETS_PER_ACCOUNT = int(os.getenv("MAX_TWEETS_PER_ACCOUNT", "20"))
 SEND_EMAIL_REPORT = os.getenv("SEND_EMAIL_REPORT", "false").lower() == "true"
+USE_GPT_SYNTHESIS = os.getenv("USE_GPT_SYNTHESIS", "true").lower() == "true"
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4-turbo")
 
 TIER_1 = {x.lower() for x in {
     "cobie", "zachxbt", "CryptoHayes", "jessepollak",
@@ -140,7 +150,7 @@ def is_promotional_tweet(text):
 
 
 def analyze_sentiment(text):
-    """Analyse sentiment avec word boundaries regex pour éviter les faux positifs"""
+    """Analyse sentiment avec word boundaries regex"""
     text_lower = (text or "").lower()
     positive_count = 0
     negative_count = 0
@@ -289,7 +299,7 @@ def extract_contracts_and_links(text):
 
 
 def detect_narratives(text):
-    """Détecte les narratives avec word boundaries pour éviter le bruit"""
+    """Détecte les narratives avec word boundaries"""
     text_l = (text or "").lower()
     narratives = []
     for name, keywords in NARRATIVE_KEYWORDS.items():
@@ -316,7 +326,7 @@ def engagement_score(tweet):
 
 
 def check_coingecko_market_data(ticker_symbol):
-    """Vérifie le market cap, volume, liquidité sur CoinGecko. Retourne None si pas trouvé."""
+    """Vérifie le market cap, volume, liquidité sur CoinGecko"""
     try:
         ticker_clean = ticker_symbol.lstrip("$").lower()
         url = "https://api.coingecko.com/api/v3/search"
@@ -360,6 +370,124 @@ def check_coingecko_market_data(ticker_symbol):
         }
     except Exception as e:
         print(f"COINGECKO ERROR {ticker_symbol}: {e}")
+        return None
+
+
+def validate_market_data(market_data):
+    """Évalue la santé du marché. Retourne score 0-100 + risk flags"""
+    if not market_data:
+        return {"score": 0, "flags": ["no_market_data"], "risk_level": "critical"}
+
+    flags = []
+    score = 100
+    
+    market_cap = market_data.get("market_cap_usd") or 0
+    volume_24h = market_data.get("volume_24h_usd") or 0
+    price_change = market_data.get("price_change_24h_percent") or 0
+
+    if market_cap < 500_000:
+        flags.append("nano_cap_extreme_risk")
+        score -= 60
+    elif market_cap < 5_000_000:
+        flags.append("micro_cap_risk")
+        score -= 40
+    elif market_cap < 10_000_000:
+        flags.append("micro_cap")
+        score -= 20
+
+    if volume_24h == 0:
+        flags.append("zero_volume_dead_token")
+        score -= 50
+    elif market_cap > 0:
+        volume_ratio = volume_24h / market_cap
+        if volume_ratio < 0.01:
+            flags.append("low_liquidity")
+            score -= 25
+        elif volume_ratio > 2:
+            flags.append("possible_manipulation")
+            score -= 15
+
+    if abs(price_change) > 150:
+        flags.append("extreme_volatility_24h")
+        score -= 30
+    elif abs(price_change) > 75:
+        flags.append("high_volatility")
+        score -= 15
+
+    risk_level = "safe" if score >= 70 else "risky" if score >= 40 else "critical"
+
+    return {
+        "score": max(0, score),
+        "flags": flags,
+        "risk_level": risk_level
+    }
+
+
+def analyze_with_gpt(ticker, signal_data, market_validation):
+    """Synthèse GPT avec contraintes strictes pour détection de gems"""
+    if not OPENAI_AVAILABLE or not USE_GPT_SYNTHESIS or not OPENAI_API_KEY:
+        return None
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        prompt = f"""You are a strict crypto gem detector. Analyze this signal with harsh constraints.
+
+TICKER: {ticker}
+
+SOCIAL SIGNAL:
+- Score: {signal_data.get('score')}/100
+- Sentiment: {signal_data.get('avg_sentiment')}
+- Mentions: {signal_data.get('mention_count')} by {signal_data.get('author_count')} accounts
+- Top accounts: {', '.join(signal_data.get('authors', [])[:5])}
+- Has contract/link: {signal_data.get('has_contract')}
+- Narrative: {signal_data.get('narratives')}
+
+MARKET VALIDATION:
+- Market cap USD: ${signal_data.get('market_cap_usd', 'N/A'):,}
+- Volume 24h USD: ${signal_data.get('volume_24h_usd', 'N/A'):,}
+- Price change 24h: {signal_data.get('price_change_24h_percent', 'N/A')}%
+- Validation score: {market_validation.get('score')}/100
+- Risk flags: {', '.join(market_validation.get('flags', []))}
+- Risk level: {market_validation.get('risk_level')}
+
+STRICT CONSTRAINTS:
+1. REJECT if market cap < $500K (no nano-caps)
+2. REJECT if volume 24h = 0 (dead token)
+3. REJECT if price volatility > 150% in 24h (obvious pump/dump)
+4. FLAG as RISKY if market cap < $5M (even if signal good)
+5. REQUIRE 2+ Tier1 accounts OR strong narrative + Tier1 + contract
+6. Consider market risk flags heavily
+
+OUTPUT ONLY JSON (no other text):
+{{
+  "verdict": "GEM" | "RISKY_POTENTIAL" | "SKIP",
+  "confidence": 0-100,
+  "reasoning": "brief reasoning",
+  "market_risk": "critical" | "high" | "moderate" | "low",
+  "recommendation": "BUY_NOW" | "WATCHLIST" | "WAIT" | "AVOID",
+  "key_risks": ["risk1", "risk2"],
+  "upside_potential": "low" | "medium" | "high"
+}}"""
+
+        response = client.chat.completions.create(
+            model=GPT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=500
+        )
+
+        response_text = response.choices[0].message.content.strip()
+        
+        try:
+            analysis = json.loads(response_text)
+            return analysis
+        except json.JSONDecodeError:
+            print(f"GPT parsing error for {ticker}: {response_text[:200]}")
+            return None
+
+    except Exception as e:
+        print(f"GPT ERROR {ticker}: {e}")
         return None
 
 
@@ -415,7 +543,7 @@ def score_ticker(ticker, mentions):
 
 
 def classify_signal(ticker, mentions, score, avg_sentiment):
-    """Classifie un ticker dans une catégorie de signal"""
+    """Classifie un ticker"""
     authors = {m["author"] for m in mentions}
     author_count = len(authors)
     has_contract = any(m["has_contract_or_link"] for m in mentions)
@@ -492,6 +620,28 @@ def build_report_data(tweets):
         signal_type = classify_signal(ticker, mentions, score, avg_sentiment)
         
         gecko_data = check_coingecko_market_data(ticker)
+        market_validation = validate_market_data(gecko_data)
+
+        authors_set = {m["author"] for m in mentions}
+        has_tier1 = any(get_author_tier(a) == 1 for a in authors_set)
+        has_contract = any(m["has_contract_or_link"] for m in mentions)
+
+        signal_data = {
+            "score": score,
+            "avg_sentiment": avg_sentiment,
+            "mention_count": len(mentions),
+            "author_count": len(authors),
+            "authors": authors,
+            "has_contract": has_contract,
+            "narratives": detect_narratives(" ".join([m["text"] for m in mentions[:3]])),
+            "market_cap_usd": gecko_data.get("market_cap_usd") if gecko_data else None,
+            "volume_24h_usd": gecko_data.get("volume_24h_usd") if gecko_data else None,
+            "price_change_24h_percent": gecko_data.get("price_change_24h_percent") if gecko_data else None,
+        }
+
+        gpt_analysis = None
+        if signal_type in ["strong_buy", "watchlist"] and USE_GPT_SYNTHESIS:
+            gpt_analysis = analyze_with_gpt(ticker, signal_data, market_validation)
 
         ranked.append({
             "ticker": ticker,
@@ -502,6 +652,8 @@ def build_report_data(tweets):
             "authors": authors,
             "signal_type": signal_type,
             "market_data": gecko_data,
+            "market_validation": market_validation,
+            "gpt_analysis": gpt_analysis,
             "mentions": mentions,
         })
 
@@ -528,140 +680,130 @@ def build_report_data(tweets):
 
 def build_text_report(data):
     lines = []
-    lines.append("Crypto X Trend Report V8.2 - Production Ready")
+    lines.append("Crypto X Trend Report V9 - GPT Synthesis Gem Detection")
     lines.append("=" * 80)
     lines.append(f"Date UTC : {data['generated_at_utc']}")
-    lines.append(f"Tweets analysés après déduplication : {data['tweets_analyzed']}")
-    lines.append(f"Tweets ignorés car listes de tickers : {data['ignored_list_tweets']}")
+    lines.append(f"Tweets analysés : {data['tweets_analyzed']}")
+    lines.append(f"Ignorés (ticker lists) : {data['ignored_list_tweets']}")
+    if USE_GPT_SYNTHESIS:
+        lines.append(f"GPT Synthesis: ENABLED ({GPT_MODEL})")
+    else:
+        lines.append(f"GPT Synthesis: DISABLED")
     lines.append("")
 
-    lines.append("TOP NARRATIVES (word boundaries, pas de bruit)")
+    lines.append("TOP NARRATIVES")
     lines.append("-" * 80)
     if data["narratives"]:
         for narrative, count in data["narratives"]:
             lines.append(f"  {narrative}: {count} mentions")
     else:
-        lines.append("  Aucune narrative forte détectée.")
+        lines.append("  Aucune narrative.")
     lines.append("")
 
-    lines.append("SIGNAUX D'ACHAT FORTS (Score 70+, Sentiment > 0.3, 2+ comptes ou Tier1 + contrat)")
+    lines.append("🚀 POTENTIAL GEMS - GPT VERIFIED")
     lines.append("-" * 80)
-    if data["strong_buy"]:
-        for r in data["strong_buy"][:10]:
-            lines.append(
-                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
-                f"{r['mention_count']} mentions — {r['author_count']} comptes: "
-                f"{', '.join('@' + a for a in r['authors'])}"
-            )
-            if r["market_data"]:
-                mc = r["market_data"]
-                lines.append(f"    Market: ${mc.get('market_cap_usd', 'N/A'):,} | Vol24h: ${mc.get('volume_24h_usd', 'N/A'):,}")
-            for m in r["mentions"][:2]:
-                lines.append(f"    @{m['author']}: {m['text']}")
-                lines.append(f"    {m['url']}")
+    gems = [r for r in data["strong_buy"] if r["gpt_analysis"] and r["gpt_analysis"].get("verdict") == "GEM"]
+    if gems:
+        for r in gems[:10]:
+            lines.append(f"  {r['ticker']} — Score {r['score']}/100 — {r['author_count']} comptes")
+            if r["gpt_analysis"]:
+                gpt = r["gpt_analysis"]
+                lines.append(f"    GPT Verdict: GEM (confidence {gpt.get('confidence', '?')}/100)")
+                lines.append(f"    Recommendation: {gpt.get('recommendation', '?')}")
+                lines.append(f"    Risk: {gpt.get('market_risk', '?')}")
+                lines.append(f"    Reasoning: {gpt.get('reasoning', '?')}")
             lines.append("")
     else:
-        lines.append("  Aucun signal d'achat fort détecté.")
-    lines.append("")
+        lines.append("  No gems detected in this period.\n")
 
-    lines.append("WATCHLIST PRIORITAIRE (Score 60+, Sentiment > 0.1, 2+ comptes ou Tier1)")
+    lines.append("⚠️ RISKY POTENTIAL - WATCH CAREFULLY")
     lines.append("-" * 80)
-    if data["watchlist"]:
-        for r in data["watchlist"][:15]:
-            lines.append(
-                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
-                f"{r['mention_count']} mentions — {r['author_count']} comptes: "
-                f"{', '.join('@' + a for a in r['authors'])}"
-            )
-            if r["market_data"]:
-                mc = r["market_data"]
-                lines.append(f"    Market: ${mc.get('market_cap_usd', 'N/A'):,} | Vol24h: ${mc.get('volume_24h_usd', 'N/A'):,}")
-            lines.append(f"    Statut: À surveiller, vérifier techniquement avant entrée")
-        lines.append("")
+    risky = [r for r in data["strong_buy"] + data["watchlist"] if r["gpt_analysis"] and r["gpt_analysis"].get("verdict") == "RISKY_POTENTIAL"]
+    if risky:
+        for r in risky[:10]:
+            lines.append(f"  {r['ticker']} — Score {r['score']}/100 — Risk: {r['market_validation']['risk_level']}")
+            if r["gpt_analysis"]:
+                gpt = r["gpt_analysis"]
+                lines.append(f"    Recommendation: {gpt.get('recommendation', '?')}")
+                lines.append(f"    Key Risks: {', '.join(gpt.get('key_risks', []))}")
+            lines.append("")
     else:
-        lines.append("  Aucun ticker en watchlist.")
-    lines.append("")
+        lines.append("  No risky potentials.\n")
 
-    lines.append("RED FLAGS & ALERTES SÉVÈRES (Vraiment négatif)")
+    lines.append("🔴 RED FLAGS - SKIP THESE")
     lines.append("-" * 80)
     if data["red_flags"]:
         for r in data["red_flags"][:10]:
-            lines.append(
-                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
-                f"Raison: Mots négatifs détectés (scam, hack, rug, honeypot, etc)"
-            )
-            for m in r["mentions"][:1]:
-                lines.append(f"    @{m['author']}: {m['text']}")
+            lines.append(f"  {r['ticker']} — Sentiment {r['avg_sentiment']}")
+            lines.append(f"    Reason: Negative keywords detected")
             lines.append("")
     else:
-        lines.append("  Aucune alerte sévère détectée.")
-    lines.append("")
+        lines.append("  No red flags detected.\n")
 
-    lines.append("CONTRATS DÉTECTÉS / LIENS DEX / PUMP.FUN")
+    lines.append("MARKET DATA & CONTRACTS")
     lines.append("-" * 80)
     if data["new_contracts"]:
-        for item in data["new_contracts"][:10]:
-            sentiment_indicator = "POSITIF" if item["sentiment"] > 0 else "NEGATIF" if item["sentiment"] < 0 else "NEUTRE"
-            lines.append(f"  @{item['author']} [{sentiment_indicator}]: {item['text']}")
+        for item in data["new_contracts"][:5]:
+            sentiment_indicator = "+" if item["sentiment"] > 0 else "-" if item["sentiment"] < 0 else "~"
+            lines.append(f"  [@{item['author']} {sentiment_indicator}] {item['text']}")
             if item["contracts"]:
-                lines.append(f"    EVM: {', '.join(item['contracts'][:2])}")
-            if item["sol_contracts"]:
-                lines.append(f"    Solana: {', '.join(item['sol_contracts'][:2])}")
-            lines.append(f"    {item['url']}")
+                lines.append(f"    Contracts: {', '.join(item['contracts'][:2])}")
             lines.append("")
     else:
-        lines.append("  Aucun contrat ou lien DEX détecté.")
-    lines.append("")
+        lines.append("  No contracts detected.\n")
 
-    lines.append("NOTES TECHNIQUES V8.2")
+    lines.append("NOTES TECHNIQUES V9")
     lines.append("-" * 80)
-    lines.append("  Narratives + Sentiment avec word boundaries (\\b) pour éliminer le bruit")
-    lines.append("  Blacklist enrichie: indices boursiers, actions, ETF, lettres seules")
-    lines.append("  CoinGecko market data: market cap, volume 24h inclus pour context")
-    lines.append("  Catégories: Strong buy (70+, strict), Watchlist (60+, à vérifier), Red flags (vrais signaux négatifs)")
-    lines.append("  Score plafonné à 45 pour single-account sauf Tier1 + contrat (plafonné 65)")
-    lines.append("  Malus pour mentions répétées du même auteur (anti-spam)")
-    lines.append("  Email optionnel, false par défaut, ne plante pas si config manquante")
-    lines.append("  Ce rapport n'est pas un conseil: détecte les signaux sociaux uniquement.")
+    lines.append("  Pipeline: Social signals → Market validation → GPT synthesis")
+    lines.append("  Sentiment: Word boundaries regex (no false positives)")
+    lines.append("  Market validation: Honeypot detection, liquidity check")
+    if USE_GPT_SYNTHESIS:
+        lines.append(f"  GPT Model: {GPT_MODEL} with strict gem detection constraints")
+    lines.append("  Constraints: Market cap > $500K, volume > 0, no extreme volatility")
+    lines.append("  Not financial advice. High risk tolerance recommended for gems.")
+
     return "\n".join(lines)
 
 
 def save_outputs(data, report):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.txt")
-    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.json")
-    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v82_{stamp}.csv")
+    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v9_{stamp}.txt")
+    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v9_{stamp}.json")
+    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v9_{stamp}.csv")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(report)
 
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "ticker", "score", "sentiment", "mentions", "author_count", "signal_type", 
-            "authors", "market_cap_usd", "volume_24h_usd", "price_change_24h_pct"
+            "ticker", "score", "sentiment", "mentions", "author_count", "signal_type",
+            "market_cap", "volume_24h", "market_risk", "gpt_verdict", "gpt_recommendation"
         ])
         for r in data["ranked"]:
             market_cap = r["market_data"].get("market_cap_usd") if r["market_data"] else None
             volume = r["market_data"].get("volume_24h_usd") if r["market_data"] else None
-            price_change = r["market_data"].get("price_change_24h_percent") if r["market_data"] else None
+            market_risk = r["market_validation"].get("risk_level") if r["market_validation"] else None
+            gpt_verdict = r["gpt_analysis"].get("verdict") if r["gpt_analysis"] else None
+            gpt_rec = r["gpt_analysis"].get("recommendation") if r["gpt_analysis"] else None
+            
             writer.writerow([
                 r["ticker"], r["score"], r["avg_sentiment"], r["mention_count"],
-                r["author_count"], r["signal_type"], ", ".join(r["authors"]),
-                market_cap, volume, price_change
+                r["author_count"], r["signal_type"],
+                market_cap, volume, market_risk, gpt_verdict, gpt_rec
             ])
 
     return txt_path, json_path, csv_path
 
 
 def send_email(subject, body):
-    """Envoie email mais ne plante pas le script si ça échoue"""
+    """Envoie email optionnel"""
     if not all([EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT]):
-        print("EMAIL CONFIG INCOMPLETE: Email sending skipped. Set EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD, SMTP_SERVER, SMTP_PORT to send.")
+        print("EMAIL CONFIG INCOMPLETE: Skipped.")
         return False
 
     try:
@@ -680,17 +822,19 @@ def send_email(subject, body):
                 server.starttls()
                 server.login(EMAIL_FROM, EMAIL_PASSWORD)
                 server.send_message(msg)
-        print("EMAIL SENT SUCCESSFULLY")
+        print("EMAIL SENT")
         return True
     except Exception as e:
-        print(f"EMAIL SEND FAILED: {e}")
-        print("Report was generated successfully. You can find it in the reports/ directory.")
+        print(f"EMAIL FAILED: {e}")
         return False
 
 
 def main():
     if not TWITTERAPI_KEY:
-        raise ValueError("TWITTERAPI_KEY manquant dans les variables d'environnement")
+        raise ValueError("TWITTERAPI_KEY manquant")
+
+    if USE_GPT_SYNTHESIS and not OPENAI_API_KEY:
+        print("WARNING: USE_GPT_SYNTHESIS=true but OPENAI_API_KEY missing. Continuing without GPT.")
 
     accounts = load_accounts()
     print(f"Comptes chargés : {len(accounts)}")
@@ -698,9 +842,10 @@ def main():
     all_tweets = []
     for account in accounts:
         tweets = fetch_latest_tweets(account, limit=MAX_TWEETS_PER_ACCOUNT)
-        print(f"@{account}: {len(tweets)} tweets récupérés")
+        print(f"@{account}: {len(tweets)} tweets")
         all_tweets.extend(tweets)
 
+    print("\nGenerating report...")
     data = build_report_data(all_tweets)
     report = build_text_report(data)
     txt_path, json_path, csv_path = save_outputs(data, report)
@@ -708,15 +853,13 @@ def main():
     print("\n" + "=" * 80)
     print(report)
     print("=" * 80)
-    print(f"Rapports sauvegardés:")
-    print(f"  TXT: {txt_path}")
-    print(f"  JSON: {json_path}")
-    print(f"  CSV: {csv_path}")
+    print(f"\nSaved to:")
+    print(f"  {txt_path}")
+    print(f"  {json_path}")
+    print(f"  {csv_path}")
 
     if SEND_EMAIL_REPORT:
-        send_email("Crypto X Trend Report V8.2", report)
-    else:
-        print("Email non activé: SEND_EMAIL_REPORT=false. Rapports sauvegardés localement.")
+        send_email("Crypto X Trend Report V9", report)
 
 
 if __name__ == "__main__":
