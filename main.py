@@ -1,19 +1,11 @@
 import os
 import re
-import smtplib
 import requests
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from collections import defaultdict, Counter
 
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM")
-EMAIL_TO = os.getenv("EMAIL_TO")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 
 
 EARLY_ALPHA = {
@@ -53,44 +45,98 @@ def load_accounts(path="accounts.txt"):
 
 def fetch_latest_tweets(username, limit=20):
     url = "https://api.twitterapi.io/twitter/user/latest_tweets"
-    headers = {"X-API-Key": TWITTERAPI_KEY}
+
+    headers = {
+        "X-API-Key": TWITTERAPI_KEY
+    }
+
     params = {
         "userName": username,
         "pageSize": min(limit, 20),
-        "includeReplies": False
+        "includeReplies": "false"
     }
 
-    r = requests.get(url, headers=headers, params=params, timeout=30)
-    if r.status_code != 200:
-        print(f"Erreur API pour {username}: {r.status_code} - {r.text[:300]}")
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+    except Exception as e:
+        print(f"ERREUR REQUETE {username}: {e}")
         return []
 
-    data = r.json()
+    print(f"\nSTATUS {username}: {r.status_code}")
+    print(f"REPONSE BRUTE {username}:")
+    print(r.text[:1000])
 
-    tweets = data.get("tweets") or data.get("data") or []
-    if isinstance(tweets, dict):
-        tweets = tweets.get("tweets", [])
+    if r.status_code != 200:
+        return []
+
+    try:
+        data = r.json()
+    except Exception as e:
+        print(f"ERREUR JSON {username}: {e}")
+        return []
+
+    tweets = []
+
+    # Plusieurs formats possibles selon l'API
+    if isinstance(data, dict):
+        if "tweets" in data and isinstance(data["tweets"], list):
+            tweets = data["tweets"]
+        elif "data" in data and isinstance(data["data"], list):
+            tweets = data["data"]
+        elif "data" in data and isinstance(data["data"], dict):
+            if "tweets" in data["data"]:
+                tweets = data["data"]["tweets"]
+            elif "data" in data["data"]:
+                tweets = data["data"]["data"]
+        elif "result" in data and isinstance(data["result"], list):
+            tweets = data["result"]
 
     cleaned = []
-    for t in tweets:
-        text = t.get("text") or t.get("content") or ""
-        created_at = t.get("createdAt") or t.get("created_at") or ""
-        tweet_id = t.get("id") or t.get("tweetId") or ""
 
-        cleaned.append({
-            "id": tweet_id,
-            "author": username,
-            "text": text,
-            "created_at": created_at,
-            "url": f"https://x.com/{username}/status/{tweet_id}" if tweet_id else ""
-        })
+    for t in tweets:
+        if not isinstance(t, dict):
+            continue
+
+        text = (
+            t.get("text")
+            or t.get("content")
+            or t.get("full_text")
+            or ""
+        )
+
+        created_at = (
+            t.get("createdAt")
+            or t.get("created_at")
+            or t.get("created_time")
+            or ""
+        )
+
+        tweet_id = (
+            t.get("id")
+            or t.get("tweetId")
+            or t.get("tweet_id")
+            or ""
+        )
+
+        if text:
+            cleaned.append({
+                "id": tweet_id,
+                "author": username,
+                "text": text,
+                "created_at": created_at,
+                "url": f"https://x.com/{username}/status/{tweet_id}" if tweet_id else ""
+            })
 
     return cleaned
 
 
 def extract_tickers(text):
     tickers = re.findall(r"\$[A-Za-z]{2,10}", text)
-    blacklist = {"$USD", "$USDT", "$USDC", "$BTC", "$ETH"}
+
+    blacklist = {
+        "$USD", "$USDT", "$USDC", "$BTC", "$ETH"
+    }
+
     return [t.upper() for t in tickers if t.upper() not in blacklist]
 
 
@@ -103,9 +149,11 @@ def extract_contracts_and_links(text):
 def detect_narratives(text):
     text_l = text.lower()
     found = []
+
     for narrative, keywords in NARRATIVE_KEYWORDS.items():
         if any(k in text_l for k in keywords):
             found.append(narrative)
+
     return found
 
 
@@ -135,6 +183,7 @@ def build_report(tweets):
 
     for tweet in tweets:
         text = tweet["text"]
+
         tickers = extract_tickers(text)
         narratives = detect_narratives(text)
         contracts, dex_links = extract_contracts_and_links(text)
@@ -169,72 +218,63 @@ def build_report(tweets):
 
     lines.append("TOP NARRATIVES")
     lines.append("-" * 50)
+
     if narrative_counter:
         for narrative, count in narrative_counter.most_common(10):
             lines.append(f"- {narrative}: {count} mentions")
     else:
         lines.append("Aucune narrative forte détectée.")
-    lines.append("")
 
+    lines.append("")
     lines.append("TOP TICKERS")
     lines.append("-" * 50)
+
     if ticker_mentions:
         ranked = []
+
         for ticker, mentions in ticker_mentions.items():
             ranked.append((ticker, score_ticker(ticker, mentions), mentions))
 
         ranked.sort(key=lambda x: x[1], reverse=True)
 
-        for ticker, score, mentions in ranked[:15]:
+        for ticker, score, mentions in ranked[:20]:
             authors = sorted({m["author"] for m in mentions})
-            lines.append(f"{ticker} — Score {score}/100 — {len(mentions)} mentions — Comptes: {', '.join(authors)}")
+            lines.append(
+                f"{ticker} — Score {score}/100 — "
+                f"{len(mentions)} mentions — Comptes: {', '.join(authors)}"
+            )
+
             for m in mentions[:3]:
                 lines.append(f"  • @{m['author']}: {m['text']}")
                 if m["url"]:
                     lines.append(f"    {m['url']}")
+
             lines.append("")
     else:
         lines.append("Aucun cashtag détecté.")
-    lines.append("")
 
+    lines.append("")
     lines.append("CONTRATS / LIENS DEXSCREENER DETECTES")
     lines.append("-" * 50)
+
     if new_contracts:
         for item in new_contracts[:10]:
             lines.append(f"@{item['author']}: {item['text']}")
+
             if item["contracts"]:
                 lines.append(f"  Contrats: {', '.join(item['contracts'])}")
+
             if item["dex_links"]:
                 lines.append(f"  DexScreener: {', '.join(item['dex_links'])}")
+
             if item["url"]:
                 lines.append(f"  Tweet: {item['url']}")
+
             lines.append("")
     else:
         lines.append("Aucun contrat ou lien DexScreener détecté.")
 
     return "\n".join(lines)
-
-
-def send_email(subject, body):
-    if not all([EMAIL_FROM, EMAIL_TO, EMAIL_PASSWORD]):
-        raise ValueError("Secrets email manquants : EMAIL_FROM, EMAIL_TO ou EMAIL_PASSWORD")
-
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = subject
-
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-
-if SMTP_PORT == 465:
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-        server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.send_message(msg)
-else:
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(EMAIL_FROM, EMAIL_PASSWORD)
-        server.send_message(msg)
 
 
 def main():
@@ -245,17 +285,20 @@ def main():
     print(f"Comptes chargés : {len(accounts)}")
 
     all_tweets = []
+
     for account in accounts:
         tweets = fetch_latest_tweets(account, limit=20)
-        print(f"{account}: {len(tweets)} tweets")
+        print(f"{account}: {len(tweets)} tweets nettoyés")
         all_tweets.extend(tweets)
 
     report = build_report(all_tweets)
-    print(report)
 
-    subject = "Crypto X Trend Report"
-    send_email(subject, report)
-    print("Email envoyé.")
+    print("\n" + "=" * 80)
+    print(report)
+    print("=" * 80)
+
+    print("EMAIL DESACTIVE TEMPORAIREMENT")
+    print("Objectif actuel : corriger d'abord la récupération TwitterAPI.io")
 
 
 if __name__ == "__main__":
