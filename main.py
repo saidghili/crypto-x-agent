@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION V2 - CRYPTO X AGENT - FILTERED SIGNALS - 2026-06-11")
+print("VERSION V3 - CRYPTO X AGENT - CLEAN TICKERS + NEW GEMS - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -60,6 +60,7 @@ BLACKLIST_TICKERS = {
     "$MSFT", "$GOOGL", "$GOOG", "$AMZN", "$META",
     "$NVDA", "$NFLX", "$AMD", "$INTC", "$PLTR",
     "$MSTR", "$COIN", "$HOOD", "$NKE", "$DIS",
+    "$K", "$M", "$B"
 }
 
 KNOWN_LARGE_CAPS = {
@@ -67,6 +68,9 @@ KNOWN_LARGE_CAPS = {
     "$LINK", "$AAVE", "$SUI", "$TRX", "$XMR", "$ZEC",
     "$NEAR", "$PEPE", "$SHIB", "$FLOKI", "$ARB", "$OP",
     "$INJ", "$APT", "$DOT", "$LTC", "$BCH", "$TON",
+    "$UNI", "$MKR", "$RNDR", "$RENDER", "$FET", "$TAO",
+    "$ONDO", "$PENDLE", "$SEI", "$TIA", "$JUP", "$WIF",
+    "$BONK"
 }
 
 
@@ -180,16 +184,29 @@ def deduplicate_tweets(tweets):
 
 
 def extract_tickers(text):
-    tickers = re.findall(r"\$[A-Za-z0-9_]{2,12}", text)
+    raw = re.findall(r"\$[A-Za-z0-9_]{2,15}", text)
     clean = []
 
-    for t in tickers:
-        t = t.upper()
+    for ticker in raw:
+        ticker = ticker.upper()
 
-        if t in BLACKLIST_TICKERS:
+        # Supprimer les montants : $64, $100, $4000
+        if re.fullmatch(r"\$[0-9]+", ticker):
             continue
 
-        clean.append(t)
+        # Supprimer les montants : $64K, $75K, $40B, $30M
+        if re.fullmatch(r"\$[0-9]+[KMB]", ticker):
+            continue
+
+        # Supprimer les montants décimaux potentiels : $63.3K ne sera normalement pas capté,
+        # mais on garde une sécurité simple.
+        if re.fullmatch(r"\$[0-9]+_[0-9]+", ticker):
+            continue
+
+        if ticker in BLACKLIST_TICKERS:
+            continue
+
+        clean.append(ticker)
 
     return clean
 
@@ -202,7 +219,6 @@ def is_ticker_list_tweet(text):
 def extract_contracts_and_links(text):
     evm_contracts = re.findall(r"0x[a-fA-F0-9]{40}", text)
 
-    # Solana-like contract addresses, rough detection
     solana_contracts = re.findall(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b", text)
 
     dexscreener_links = re.findall(r"https?://(?:www\.)?dexscreener\.com/\S+", text)
@@ -247,7 +263,6 @@ def score_ticker(ticker, mentions):
     author_count = len(authors)
     mention_count = len(mentions)
 
-    # Base : nombre d'auteurs indépendants
     if author_count == 1:
         score += 15
     elif author_count == 2:
@@ -255,10 +270,8 @@ def score_ticker(ticker, mentions):
     elif author_count >= 3:
         score += 65
 
-    # Mentions répétées
     score += min(mention_count * 4, 20)
 
-    # Pénalité si gros coin connu et seulement 1 auteur
     if ticker in KNOWN_LARGE_CAPS and author_count == 1:
         score -= 25
 
@@ -289,12 +302,19 @@ def score_ticker(ticker, mentions):
         if m["engagement"] > 250:
             score += 10
 
+    # règle importante : un seul compte ne peut pas donner un score énorme
+    if author_count == 1:
+        score = min(score, 55)
+
     return max(0, min(score, 100))
 
 
 def classify_ticker(ticker, mentions):
     authors = {m["author"] for m in mentions}
-    has_contract = any(m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"] for m in mentions)
+    has_contract = any(
+        m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]
+        for m in mentions
+    )
 
     if ticker in KNOWN_LARGE_CAPS:
         return "Large cap / coin connu"
@@ -308,13 +328,35 @@ def classify_ticker(ticker, mentions):
     return "Signal faible"
 
 
+def is_new_gem_candidate(ticker, mentions, score):
+    if ticker in KNOWN_LARGE_CAPS:
+        return False
+
+    if ticker in BLACKLIST_TICKERS:
+        return False
+
+    authors = {m["author"] for m in mentions}
+
+    has_contract = any(
+        m["contracts"] or m["sol_contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]
+        for m in mentions
+    )
+
+    if score >= 60 and len(authors) >= 2:
+        return True
+
+    if has_contract and score >= 45:
+        return True
+
+    return False
+
+
 def build_report(tweets):
     tweets = deduplicate_tweets(tweets)
 
     ticker_mentions = defaultdict(list)
     narrative_counter = Counter()
     new_contracts = []
-    ignored_tickers = Counter()
 
     for tweet in tweets:
         text = tweet["text"]
@@ -341,10 +383,6 @@ def build_report(tweets):
             })
 
         for ticker in tickers:
-            if ticker in BLACKLIST_TICKERS:
-                ignored_tickers[ticker] += 1
-                continue
-
             ticker_mentions[ticker].append({
                 "author": tweet["author"],
                 "text": text[:260],
@@ -358,8 +396,20 @@ def build_report(tweets):
                 "is_list_tweet": is_list,
             })
 
+    ranked = []
+    for ticker, mentions in ticker_mentions.items():
+        ranked.append((ticker, score_ticker(ticker, mentions), mentions))
+
+    ranked.sort(key=lambda x: x[1], reverse=True)
+
+    new_gems = [
+        (ticker, score, mentions)
+        for ticker, score, mentions in ranked
+        if is_new_gem_candidate(ticker, mentions, score)
+    ]
+
     lines = []
-    lines.append("Crypto X Trend Report V2")
+    lines.append("Crypto X Trend Report V3")
     lines.append("=" * 70)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Tweets analysés après déduplication : {len(tweets)}")
@@ -375,17 +425,35 @@ def build_report(tweets):
         lines.append("Aucune narrative forte détectée.")
 
     lines.append("")
+    lines.append("TOP NEW GEMS")
+    lines.append("-" * 70)
+
+    if new_gems:
+        for ticker, score, mentions in new_gems[:10]:
+            authors = sorted({m["author"] for m in mentions})
+            classification = classify_ticker(ticker, mentions)
+
+            lines.append(
+                f"{ticker} — Score {score}/100 — {classification} — "
+                f"{len(mentions)} mentions — {len(authors)} comptes: "
+                f"{', '.join('@' + a for a in authors)}"
+            )
+
+            for m in mentions[:3]:
+                flag = " [LISTE DE TICKERS]" if m["is_list_tweet"] else ""
+                lines.append(f"  • @{m['author']}{flag}: {m['text']}")
+                if m["url"]:
+                    lines.append(f"    {m['url']}")
+
+            lines.append("")
+    else:
+        lines.append("Aucun nouveau gem fort détecté dans cette fenêtre.")
+
+    lines.append("")
     lines.append("TOP SIGNAUX TICKERS")
     lines.append("-" * 70)
 
-    if ticker_mentions:
-        ranked = []
-
-        for ticker, mentions in ticker_mentions.items():
-            ranked.append((ticker, score_ticker(ticker, mentions), mentions))
-
-        ranked.sort(key=lambda x: x[1], reverse=True)
-
+    if ranked:
         for ticker, score, mentions in ranked[:20]:
             authors = sorted({m["author"] for m in mentions})
             classification = classify_ticker(ticker, mentions)
@@ -440,33 +508,29 @@ def build_report(tweets):
     lines.append("RESUME ACTIONNABLE")
     lines.append("-" * 70)
 
-    if ticker_mentions:
-        strong = []
-        watch = []
+    strong = []
+    watch = []
 
-        for ticker, mentions in ticker_mentions.items():
-            s = score_ticker(ticker, mentions)
-            c = classify_ticker(ticker, mentions)
+    for ticker, score, mentions in ranked:
+        c = classify_ticker(ticker, mentions)
 
-            if s >= 70:
-                strong.append((ticker, s, c))
-            elif s >= 40:
-                watch.append((ticker, s, c))
+        if score >= 70:
+            strong.append((ticker, score, c))
+        elif score >= 40:
+            watch.append((ticker, score, c))
 
-        if strong:
-            lines.append("Signaux forts :")
-            for ticker, s, c in sorted(strong, key=lambda x: x[1], reverse=True):
-                lines.append(f"- {ticker}: {s}/100 — {c}")
-        else:
-            lines.append("Aucun signal ticker vraiment fort.")
-
-        if watch:
-            lines.append("")
-            lines.append("À surveiller :")
-            for ticker, s, c in sorted(watch, key=lambda x: x[1], reverse=True)[:10]:
-                lines.append(f"- {ticker}: {s}/100 — {c}")
+    if strong:
+        lines.append("Signaux forts :")
+        for ticker, s, c in sorted(strong, key=lambda x: x[1], reverse=True):
+            lines.append(f"- {ticker}: {s}/100 — {c}")
     else:
-        lines.append("Aucun ticker exploitable détecté.")
+        lines.append("Aucun signal ticker vraiment fort.")
+
+    if watch:
+        lines.append("")
+        lines.append("À surveiller :")
+        for ticker, s, c in sorted(watch, key=lambda x: x[1], reverse=True)[:10]:
+            lines.append(f"- {ticker}: {s}/100 — {c}")
 
     if narrative_counter:
         top_narrative = narrative_counter.most_common(1)[0][0]
@@ -526,7 +590,7 @@ def main():
     print(report)
     print("=" * 80)
 
-    send_email("Crypto X Trend Report V2", report)
+    send_email("Crypto X Trend Report V3", report)
     print("Email envoyé.")
 
 
