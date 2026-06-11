@@ -226,6 +226,11 @@ def send_email(subject, body):
 
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
+if SMTP_PORT == 465:
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+        server.login(EMAIL_FROM, EMAIL_PASSWORD)
+        server.send_message(msg)
+else:
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
         server.login(EMAIL_FROM, EMAIL_PASSWORD)
