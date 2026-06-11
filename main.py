@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from collections import defaultdict, Counter
 
 
-print("VERSION TEST TWITTERAPI.IO SANS EMAIL 2026-06-11")
+print("VERSION PROPRE TWITTERAPI.IO - SANS EMAIL - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -46,8 +46,6 @@ def load_accounts(path="accounts.txt"):
 
 
 def fetch_latest_tweets(username, limit=20):
-    # Endpoint à tester : Get User Last Tweets
-    # Si celui-ci ne marche pas, on ajustera avec l'URL exacte de TwitterAPI.io.
     url = "https://api.twitterapi.io/twitter/user/last_tweets"
 
     headers = {
@@ -63,46 +61,42 @@ def fetch_latest_tweets(username, limit=20):
     try:
         r = requests.get(url, headers=headers, params=params, timeout=30)
     except Exception as e:
-        print(f"ERREUR REQUETE {username}: {e}")
+        print(f"ERREUR REQUETE @{username}: {e}")
         return []
 
-    print(f"\nSTATUS {username}: {r.status_code}")
-    print(f"URL appelée: {r.url}")
-    print(f"REPONSE BRUTE {username}:")
-    print(r.text[:1200])
+    print(f"STATUS @{username}: {r.status_code}")
 
     if r.status_code != 200:
+        print(f"REPONSE ERREUR @{username}: {r.text[:500]}")
         return []
 
     try:
         data = r.json()
     except Exception as e:
-        print(f"ERREUR JSON {username}: {e}")
+        print(f"ERREUR JSON @{username}: {e}")
+        print(r.text[:500])
         return []
 
     tweets = []
 
-    # Formats possibles selon API
-    if isinstance(data, dict):
-        if "tweets" in data and isinstance(data["tweets"], list):
-            tweets = data["tweets"]
-
-        elif "data" in data and isinstance(data["data"], list):
-            tweets = data["data"]
-
-        elif "data" in data and isinstance(data["data"], dict):
-            if "tweets" in data["data"] and isinstance(data["data"]["tweets"], list):
-                tweets = data["data"]["tweets"]
-            elif "data" in data["data"] and isinstance(data["data"]["data"], list):
-                tweets = data["data"]["data"]
-            elif "items" in data["data"] and isinstance(data["data"]["items"], list):
-                tweets = data["data"]["items"]
-
-        elif "result" in data and isinstance(data["result"], list):
-            tweets = data["result"]
-
-        elif "items" in data and isinstance(data["items"], list):
-            tweets = data["items"]
+    # Format TwitterAPI.io confirmé :
+    # {
+    #   "status": "success",
+    #   "data": {
+    #       "tweets": [...]
+    #   }
+    # }
+    if (
+        isinstance(data, dict)
+        and "data" in data
+        and isinstance(data["data"], dict)
+        and "tweets" in data["data"]
+        and isinstance(data["data"]["tweets"], list)
+    ):
+        tweets = data["data"]["tweets"]
+    else:
+        print(f"FORMAT INATTENDU @{username}: {str(data)[:500]}")
+        return []
 
     cleaned = []
 
@@ -110,29 +104,10 @@ def fetch_latest_tweets(username, limit=20):
         if not isinstance(t, dict):
             continue
 
-        text = (
-            t.get("text")
-            or t.get("content")
-            or t.get("full_text")
-            or t.get("tweetText")
-            or ""
-        )
-
-        created_at = (
-            t.get("createdAt")
-            or t.get("created_at")
-            or t.get("created_time")
-            or t.get("created")
-            or ""
-        )
-
-        tweet_id = (
-            t.get("id")
-            or t.get("tweetId")
-            or t.get("tweet_id")
-            or t.get("rest_id")
-            or ""
-        )
+        text = t.get("text") or ""
+        tweet_id = t.get("id") or ""
+        created_at = t.get("createdAt") or ""
+        url = t.get("url") or f"https://x.com/{username}/status/{tweet_id}"
 
         if text:
             cleaned.append({
@@ -140,10 +115,12 @@ def fetch_latest_tweets(username, limit=20):
                 "author": username,
                 "text": text,
                 "created_at": created_at,
-                "url": f"https://x.com/{username}/status/{tweet_id}" if tweet_id else ""
+                "url": url,
+                "like_count": t.get("likeCount", 0),
+                "retweet_count": t.get("retweetCount", 0),
+                "reply_count": t.get("replyCount", 0),
+                "view_count": t.get("viewCount", 0),
             })
-
-    print(f"TWEETS NETTOYES {username}: {len(cleaned)}")
 
     return cleaned
 
@@ -161,7 +138,10 @@ def extract_tickers(text):
 def extract_contracts_and_links(text):
     evm_contracts = re.findall(r"0x[a-fA-F0-9]{40}", text)
     dexscreener_links = re.findall(r"https?://(?:www\.)?dexscreener\.com/\S+", text)
-    return evm_contracts, dexscreener_links
+    pumpfun_links = re.findall(r"https?://(?:www\.)?pump\.fun/\S+", text)
+    geckoterminal_links = re.findall(r"https?://(?:www\.)?geckoterminal\.com/\S+", text)
+
+    return evm_contracts, dexscreener_links, pumpfun_links, geckoterminal_links
 
 
 def detect_narratives(text):
@@ -175,21 +155,49 @@ def detect_narratives(text):
     return found
 
 
+def engagement_score(tweet):
+    likes = tweet.get("like_count", 0) or 0
+    retweets = tweet.get("retweet_count", 0) or 0
+    replies = tweet.get("reply_count", 0) or 0
+    views = tweet.get("view_count", 0) or 0
+
+    score = likes + retweets * 2 + replies * 2
+
+    if views and views > 10000:
+        score += 10
+    if views and views > 100000:
+        score += 20
+
+    return score
+
+
 def score_ticker(ticker, mentions):
     score = 0
     authors = {m["author"] for m in mentions}
 
+    # Plusieurs comptes différents
     score += min(len(authors) * 20, 60)
 
     for m in mentions:
-        if m["author"] in EARLY_ALPHA:
+        author = m["author"]
+
+        if author in EARLY_ALPHA:
             score += 15
-        if m["author"] in ONCHAIN:
+
+        if author in ONCHAIN:
             score += 10
-        if m["contracts"] or m["dex_links"]:
+
+        if m["contracts"] or m["dex_links"] or m["pump_links"] or m["gecko_links"]:
             score += 15
-        if m["author"] in ANTI_SCAM:
+
+        if author in ANTI_SCAM:
             score -= 30
+
+        if m["engagement"] > 50:
+            score += 5
+
+        if m["engagement"] > 200:
+            score += 10
 
     return max(0, min(score, 100))
 
@@ -198,44 +206,54 @@ def build_report(tweets):
     ticker_mentions = defaultdict(list)
     narrative_counter = Counter()
     new_contracts = []
+    all_links = []
 
     for tweet in tweets:
         text = tweet["text"]
 
         tickers = extract_tickers(text)
         narratives = detect_narratives(text)
-        contracts, dex_links = extract_contracts_and_links(text)
+        contracts, dex_links, pump_links, gecko_links = extract_contracts_and_links(text)
+        engagement = engagement_score(tweet)
 
         for n in narratives:
             narrative_counter[n] += 1
 
-        if contracts or dex_links:
+        if contracts or dex_links or pump_links or gecko_links:
             new_contracts.append({
                 "author": tweet["author"],
                 "contracts": contracts,
                 "dex_links": dex_links,
-                "text": text[:220],
+                "pump_links": pump_links,
+                "gecko_links": gecko_links,
+                "text": text[:240],
                 "url": tweet["url"]
             })
+
+        for link in dex_links + pump_links + gecko_links:
+            all_links.append((tweet["author"], link, tweet["url"]))
 
         for ticker in tickers:
             ticker_mentions[ticker].append({
                 "author": tweet["author"],
-                "text": text[:220],
+                "text": text[:240],
                 "url": tweet["url"],
                 "contracts": contracts,
                 "dex_links": dex_links,
+                "pump_links": pump_links,
+                "gecko_links": gecko_links,
+                "engagement": engagement,
             })
 
     lines = []
     lines.append("Crypto X Trend Report")
-    lines.append("=" * 50)
+    lines.append("=" * 60)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Tweets analysés : {len(tweets)}")
     lines.append("")
 
     lines.append("TOP NARRATIVES")
-    lines.append("-" * 50)
+    lines.append("-" * 60)
 
     if narrative_counter:
         for narrative, count in narrative_counter.most_common(10):
@@ -245,7 +263,7 @@ def build_report(tweets):
 
     lines.append("")
     lines.append("TOP TICKERS")
-    lines.append("-" * 50)
+    lines.append("-" * 60)
 
     if ticker_mentions:
         ranked = []
@@ -259,7 +277,7 @@ def build_report(tweets):
             authors = sorted({m["author"] for m in mentions})
             lines.append(
                 f"{ticker} — Score {score}/100 — "
-                f"{len(mentions)} mentions — Comptes: {', '.join(authors)}"
+                f"{len(mentions)} mentions — Comptes: {', '.join('@' + a for a in authors)}"
             )
 
             for m in mentions[:3]:
@@ -272,11 +290,11 @@ def build_report(tweets):
         lines.append("Aucun cashtag détecté.")
 
     lines.append("")
-    lines.append("CONTRATS / LIENS DEXSCREENER DETECTES")
-    lines.append("-" * 50)
+    lines.append("CONTRATS / LIENS DEX / PUMPFUN DETECTES")
+    lines.append("-" * 60)
 
     if new_contracts:
-        for item in new_contracts[:10]:
+        for item in new_contracts[:15]:
             lines.append(f"@{item['author']}: {item['text']}")
 
             if item["contracts"]:
@@ -285,12 +303,33 @@ def build_report(tweets):
             if item["dex_links"]:
                 lines.append(f"  DexScreener: {', '.join(item['dex_links'])}")
 
+            if item["pump_links"]:
+                lines.append(f"  Pump.fun: {', '.join(item['pump_links'])}")
+
+            if item["gecko_links"]:
+                lines.append(f"  GeckoTerminal: {', '.join(item['gecko_links'])}")
+
             if item["url"]:
                 lines.append(f"  Tweet: {item['url']}")
 
             lines.append("")
     else:
-        lines.append("Aucun contrat ou lien DexScreener détecté.")
+        lines.append("Aucun contrat ou lien DEX/Pump.fun détecté.")
+
+    lines.append("")
+    lines.append("RESUME")
+    lines.append("-" * 60)
+
+    if ticker_mentions:
+        lines.append("Des tickers ont été détectés. Les plus intéressants sont ceux mentionnés par plusieurs comptes indépendants.")
+    else:
+        lines.append("Aucun ticker crypto détecté dans cette fenêtre.")
+
+    if narrative_counter:
+        top_narrative = narrative_counter.most_common(1)[0][0]
+        lines.append(f"Narrative dominante actuelle : {top_narrative}.")
+    else:
+        lines.append("Aucune narrative dominante claire.")
 
     return "\n".join(lines)
 
@@ -306,7 +345,7 @@ def main():
 
     for account in accounts:
         tweets = fetch_latest_tweets(account, limit=20)
-        print(f"{account}: {len(tweets)} tweets nettoyés")
+        print(f"@{account}: {len(tweets)} tweets récupérés")
         all_tweets.extend(tweets)
 
     report = build_report(all_tweets)
@@ -316,7 +355,7 @@ def main():
     print("=" * 80)
 
     print("EMAIL DESACTIVE TEMPORAIREMENT")
-    print("Objectif actuel : corriger d'abord la récupération TwitterAPI.io")
+    print("Si les tweets sont bien récupérés, prochaine étape : réactiver l'envoi email.")
 
 
 if __name__ == "__main__":
