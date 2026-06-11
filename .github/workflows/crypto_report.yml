@@ -2,7 +2,7 @@ name: Crypto X Report
 
 on:
   schedule:
-     - cron: "0 6 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
 jobs:
@@ -25,9 +25,20 @@ jobs:
         env:
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GPT_MODEL: ${{ vars.GPT_MODEL || 'gpt-4-turbo' }}
+          USE_GPT_SYNTHESIS: ${{ vars.USE_GPT_SYNTHESIS || 'true' }}
+          SEND_EMAIL_REPORT: ${{ vars.SEND_EMAIL_REPORT || 'false' }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
         run: python main.py
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-x-reports
+          path: reports/
+          if-no-files-found: warn
