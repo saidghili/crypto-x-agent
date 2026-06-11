@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
-print("VERSION V5 - CRYPTO X AGENT - TIERED SORSA WEIGHTING - 2026-06-11")
+print("VERSION V6 - CRYPTO X AGENT - SENTIMENT ANALYSIS - 2026-06-11")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -27,12 +27,31 @@ TIER_1 = {
 TIER_2 = {
     "DegenSpartan", "nansen_ai", "0xngmi", "lookonchain",
     "MilesDeutscher", "SolBigBrain", "weremeow", "Virtuals_io",
-    "DefiLlama", "DefiIgnas", "TheFlowHorse", "Route2FI", "theunipcs"
+    "DefiLlama", "DefiIgnas", "TheFlowHorse", "Route2FI"
 }
 
 TIER_3 = {
     "CryptoMichNL", "CrashiusClay69", "BigCheds",
     "AltcoinSherpa", "Austin_Federa", "ByzGeneral"
+}
+
+ANTI_SCAM_ACCOUNTS = {
+    "zachxbt"
+}
+
+POSITIVE_KEYWORDS = {
+    "bullish", "accumulate", "loading", "buy", "buying", "strong", "upside",
+    "breakout", "support", "holding", "long", "pump", "moon", "gem", "alpha",
+    "early", "opportunity", "entry", "dip", "accumulation", "long", "going higher",
+    "outperform", "undervalued", "setup", "catalysts", "soon"
+}
+
+NEGATIVE_KEYWORDS = {
+    "bearish", "dump", "dumped", "sold", "selling", "exit", "exited", "rug", "scam",
+    "fraud", "suspicious", "down", "crash", "loss", "short", "trap", "avoid", "danger",
+    "risk", "wrong direction", "out", "red flag", "warning", "beware", "caution",
+    "manipulation", "exploit", "hack", "loss", "exposed", "negative", "concern",
+    "worried", "scared", "liquidated", "rekt", "collapse", "failed", "dead"
 }
 
 NARRATIVE_KEYWORDS = {
@@ -90,6 +109,19 @@ def get_tier_multiplier(tier):
         return 1.0
     else:
         return 0.0
+
+
+def analyze_sentiment(text):
+    text_lower = text.lower()
+    
+    positive_count = sum(1 for word in POSITIVE_KEYWORDS if word in text_lower)
+    negative_count = sum(1 for word in NEGATIVE_KEYWORDS if word in text_lower)
+    
+    if positive_count + negative_count == 0:
+        return 0.0
+    
+    sentiment = (positive_count - negative_count) / (positive_count + negative_count)
+    return max(-1.0, min(1.0, sentiment))
 
 
 def load_accounts(path="accounts.txt"):
@@ -291,6 +323,7 @@ def score_ticker(ticker, mentions):
         author = m["author"]
         author_tier = get_author_tier(author)
         tier_multiplier = get_tier_multiplier(author_tier)
+        sentiment = m["sentiment"]
 
         base_author_score = 0
 
@@ -310,7 +343,8 @@ def score_ticker(ticker, mentions):
         if m["engagement"] > 250:
             base_author_score += 10
 
-        tier_weighted_points += base_author_score * tier_multiplier
+        sentiment_multiplier = max(0, sentiment)
+        tier_weighted_points += base_author_score * tier_multiplier * (1 + sentiment_multiplier)
 
     score += min(tier_weighted_points / 2, 35)
 
@@ -353,11 +387,27 @@ def is_new_gem_candidate(ticker, mentions, score):
         for m in mentions
     )
 
-    if score >= 60 and len(authors) >= 2:
+    avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions) if mentions else 0
+
+    if score >= 60 and len(authors) >= 2 and avg_sentiment > 0:
         return True
 
-    if has_contract and score >= 45:
+    if has_contract and score >= 45 and avg_sentiment > 0:
         return True
+
+    return False
+
+
+def is_red_flag(ticker, mentions, score):
+    avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions) if mentions else 0
+
+    if avg_sentiment < -0.3:
+        return True
+
+    for m in mentions:
+        author = m["author"]
+        if author in ANTI_SCAM_ACCOUNTS and m["sentiment"] < 0:
+            return True
 
     return False
 
@@ -377,6 +427,7 @@ def build_report(tweets):
         contracts, sol_contracts, dex_links, pump_links, gecko_links = extract_contracts_and_links(text)
         engagement = engagement_score(tweet)
         is_list = is_ticker_list_tweet(text)
+        sentiment = analyze_sentiment(text)
 
         for n in narratives:
             narrative_counter[n] += 1
@@ -390,7 +441,8 @@ def build_report(tweets):
                 "pump_links": pump_links,
                 "gecko_links": gecko_links,
                 "text": text[:260],
-                "url": tweet["url"]
+                "url": tweet["url"],
+                "sentiment": sentiment
             })
 
         if is_list:
@@ -410,6 +462,7 @@ def build_report(tweets):
                 "pump_links": pump_links,
                 "gecko_links": gecko_links,
                 "engagement": engagement,
+                "sentiment": sentiment,
             })
 
     ranked = []
@@ -424,13 +477,19 @@ def build_report(tweets):
         if is_new_gem_candidate(ticker, mentions, score)
     ]
 
+    red_flags = [
+        (ticker, score, mentions)
+        for ticker, score, mentions in ranked
+        if is_red_flag(ticker, mentions, score)
+    ]
+
     lines = []
-    lines.append("Crypto X Trend Report V5 - TIERED SORSA WEIGHTING")
+    lines.append("Crypto X Trend Report V6 - SENTIMENT ANALYSIS")
     lines.append("=" * 70)
     lines.append(f"Date UTC : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Tweets analysés après déduplication : {len(tweets)}")
     lines.append(f"Tweets ignorés car listes de tickers : {ignored_list_tweets}")
-    lines.append(f"Comptes actifs : Tier 1 (8) + Tier 2 (13) + Tier 3 (6) = 27 total")
+    lines.append(f"Comptes actifs : Tier 1 (8) + Tier 2 (12) + Tier 3 (6) = 26 total")
     lines.append("")
 
     lines.append("TOP NARRATIVES")
@@ -443,16 +502,17 @@ def build_report(tweets):
         lines.append("Aucune narrative forte détectée.")
 
     lines.append("")
-    lines.append("TOP NEW GEMS")
+    lines.append("SIGNAUX D'ACHAT FORTS (Sentiment Positif)")
     lines.append("-" * 70)
 
     if new_gems:
         for ticker, score, mentions in new_gems[:10]:
             authors = sorted({m["author"] for m in mentions})
             classification = classify_ticker(ticker, mentions)
+            avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
 
             lines.append(
-                f"{ticker} — Score {score}/100 — {classification} — "
+                f"{ticker} — Score {score}/100 — Sentiment {avg_sentiment:.2f} — {classification} — "
                 f"{len(mentions)} mentions — {len(authors)} comptes: "
                 f"{', '.join('@' + a for a in authors)}"
             )
@@ -464,27 +524,48 @@ def build_report(tweets):
 
             lines.append("")
     else:
-        lines.append("Aucun nouveau gem fort détecté dans cette fenêtre.")
+        lines.append("Aucun signal d'achat fort détecté dans cette fenêtre.")
 
     lines.append("")
-    lines.append("TOP SIGNAUX TICKERS")
+    lines.append("RED FLAGS & ALERTES DE RISQUE (Sentiment Négatif)")
     lines.append("-" * 70)
 
-    if ranked:
-        for ticker, score, mentions in ranked[:20]:
+    if red_flags:
+        for ticker, score, mentions in red_flags[:10]:
             authors = sorted({m["author"] for m in mentions})
-            classification = classify_ticker(ticker, mentions)
+            avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
+
+            alert_type = "FRAUDE DETECTEE" if any(m["author"] in ANTI_SCAM_ACCOUNTS and m["sentiment"] < 0 for m in mentions) else "SENTIMENT NEGATIF"
 
             lines.append(
-                f"{ticker} — Score {score}/100 — {classification} — "
-                f"{len(mentions)} mentions — {len(authors)} comptes: "
-                f"{', '.join('@' + a for a in authors)}"
+                f"{ticker} — {alert_type} — Score {score}/100 — Sentiment {avg_sentiment:.2f} — "
+                f"{len(mentions)} mentions — {len(authors)} comptes"
             )
 
-            for m in mentions[:3]:
+            for m in mentions[:2]:
                 lines.append(f"  • @{m['author']}: {m['text']}")
                 if m["url"]:
                     lines.append(f"    {m['url']}")
+
+            lines.append("")
+    else:
+        lines.append("Aucune alerte de risque détectée.")
+
+    lines.append("")
+    lines.append("TOP SIGNAUX TICKERS (Tous sentiments)")
+    lines.append("-" * 70)
+
+    if ranked:
+        for ticker, score, mentions in ranked[:15]:
+            authors = sorted({m["author"] for m in mentions})
+            classification = classify_ticker(ticker, mentions)
+            avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
+            sentiment_label = "+" if avg_sentiment > 0.2 else ("-" if avg_sentiment < -0.2 else "Neutre")
+
+            lines.append(
+                f"{ticker} — Score {score}/100 — {sentiment_label} — {classification} — "
+                f"{len(mentions)} mentions — {len(authors)} comptes"
+            )
 
             lines.append("")
     else:
@@ -495,75 +576,30 @@ def build_report(tweets):
     lines.append("-" * 70)
 
     if new_contracts:
-        for item in new_contracts[:15]:
-            lines.append(f"@{item['author']}: {item['text']}")
+        for item in new_contracts[:10]:
+            sentiment_indicator = "POSITIF" if item["sentiment"] > 0 else ("NEGATIF" if item["sentiment"] < 0 else "NEUTRE")
+            lines.append(f"@{item['author']} [{sentiment_indicator}]: {item['text']}")
 
             if item["contracts"]:
-                lines.append(f"  Contrats EVM: {', '.join(item['contracts'])}")
-
-            if item["sol_contracts"]:
-                lines.append(f"  Contrats Solana possibles: {', '.join(item['sol_contracts'][:3])}")
-
-            if item["dex_links"]:
-                lines.append(f"  DexScreener: {', '.join(item['dex_links'])}")
-
-            if item["pump_links"]:
-                lines.append(f"  Pump.fun: {', '.join(item['pump_links'])}")
-
-            if item["gecko_links"]:
-                lines.append(f"  GeckoTerminal: {', '.join(item['gecko_links'])}")
+                lines.append(f"  Contrats EVM: {', '.join(item['contracts'][:2])}")
 
             if item["url"]:
-                lines.append(f"  Tweet: {item['url']}")
+                lines.append(f"  {item['url']}")
 
             lines.append("")
     else:
         lines.append("Aucun contrat ou lien DEX/Pump.fun détecté.")
 
     lines.append("")
-    lines.append("RESUME ACTIONNABLE")
+    lines.append("NOTES TECHNIQUES V6")
     lines.append("-" * 70)
-
-    strong = []
-    watch = []
-
-    for ticker, score, mentions in ranked:
-        c = classify_ticker(ticker, mentions)
-
-        if score >= 70:
-            strong.append((ticker, score, c))
-        elif score >= 40:
-            watch.append((ticker, score, c))
-
-    if strong:
-        lines.append("Signaux forts :")
-        for ticker, s, c in sorted(strong, key=lambda x: x[1], reverse=True):
-            lines.append(f"- {ticker}: {s}/100 — {c}")
-    else:
-        lines.append("Aucun signal ticker vraiment fort.")
-
-    if watch:
-        lines.append("")
-        lines.append("À surveiller :")
-        for ticker, s, c in sorted(watch, key=lambda x: x[1], reverse=True)[:10]:
-            lines.append(f"- {ticker}: {s}/100 — {c}")
-
-    if narrative_counter:
-        top_narrative = narrative_counter.most_common(1)[0][0]
-        lines.append("")
-        lines.append(f"Narrative dominante actuelle : {top_narrative}.")
-    else:
-        lines.append("")
-        lines.append("Aucune narrative dominante claire.")
-
-    lines.append("")
-    lines.append("NOTES TECHNIQUES V5")
-    lines.append("-" * 70)
+    lines.append("Sentiment Analysis: chaque tweet est analysé pour détecter si le contenu est positif ou négatif")
     lines.append("Tier 1 (8 comptes, 3x multiplier): cobie, zachxbt, CryptoHayes, jessepollak, blknoiz06, HsakaTrades, CL207, Pentosh1")
-    lines.append("Tier 2 (13 comptes, 2x multiplier): DegenSpartan, nansen_ai, 0xngmi, lookonchain, MilesDeutscher, SolBigBrain, weremeow, Virtuals_io, DefiLlama, DefiIgnas, TheFlowHorse, Route2FI, theunipcs")
+    lines.append("Tier 2 (12 comptes, 2x multiplier): DegenSpartan, nansen_ai, 0xngmi, lookonchain, MilesDeutscher, SolBigBrain, weremeow, Virtuals_io, DefiLlama, DefiIgnas, TheFlowHorse, Route2FI")
     lines.append("Tier 3 (6 comptes, 1x multiplier): CryptoMichNL, CrashiusClay69, BigCheds, AltcoinSherpa, Austin_Federa, ByzGeneral")
-    lines.append("Un score élevé n'est pas un signal d'achat automatique.")
-    lines.append("Vérifier prix, volume, liquidité, contrat et risque de rug avant toute décision.")
+    lines.append("Les signaux d'achat doivent avoir sentiment positif et auteurs multiples ou contrats détectés")
+    lines.append("Les red flags incluent sentiment négatif et alertes spéciales des comptes anti-scam")
+    lines.append("Un score élevé n'est pas un signal d'achat automatique si le sentiment est négatif")
 
     return "\n".join(lines)
 
@@ -609,7 +645,7 @@ def main():
     print(report)
     print("=" * 80)
 
-    send_email("Crypto X Trend Report V5 - Tiered Sorsa Weighting", report)
+    send_email("Crypto X Trend Report V6 - Sentiment Analysis", report)
     print("Email envoyé.")
 
 
