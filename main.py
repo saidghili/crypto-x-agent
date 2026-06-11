@@ -9,7 +9,7 @@ from collections import defaultdict, Counter
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-print("VERSION V7 - CRYPTO X AGENT - TREND + SENTIMENT + EXPORTS")
+print("VERSION V8 - CRYPTO X AGENT - NARRATIVES + BLACKLIST + CATEGORIES STRICTES")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 
@@ -23,7 +23,6 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "reports")
 MAX_TWEETS_PER_ACCOUNT = int(os.getenv("MAX_TWEETS_PER_ACCOUNT", "20"))
 SEND_EMAIL_REPORT = os.getenv("SEND_EMAIL_REPORT", "true").lower() == "true"
 
-# Comptes suivis, normalisés en minuscules pour éviter les erreurs de casse.
 TIER_1 = {x.lower() for x in {
     "cobie", "zachxbt", "CryptoHayes", "jessepollak",
     "blknoiz06", "HsakaTrades", "CL207", "Pentosh1"
@@ -48,16 +47,13 @@ POSITIVE_KEYWORDS = {
     "early", "opportunity", "entry", "dip", "accumulation", "going higher",
     "outperform", "undervalued", "setup", "catalysts", "loaded", "cheap",
     "reversal", "confirmation", "strength", "bullish momentum", "oversold", "bounce",
-    "recovery", "rally", "gaining", "momentum", "positive"
+    "recovery", "rally", "gaining", "momentum", "positive", "excited"
 }
 
 NEGATIVE_KEYWORDS = {
-    "bearish", "sold", "selling", "exit", "exited", "rug", "scam",
-    "fraud", "suspicious", "crash", "trap", "avoid", "danger",
-    "wrong direction", "out", "red flag", "warning", "beware", "caution",
-    "manipulation", "exploit", "hack", "exposed", "negative", "concern",
-    "liquidated", "rekt", "collapse", "failed", "dead", "untrustworthy",
-    "malicious", "attack", "vulnerable", "breach"
+    "rug", "scam", "hack", "exploit", "honeypot", "warning", "avoid",
+    "manipulation", "suspicious", "malicious", "attack", "vulnerable",
+    "breach", "fraud", "beware", "caution", "dead", "failed", "collapse"
 }
 
 BULLISH_PATTERNS = {
@@ -72,15 +68,15 @@ BEARISH_PATTERNS = {
 }
 
 NARRATIVE_KEYWORDS = {
-    "AI / AI Agents": ["ai", "agent", "agents", "virtuals", "deai", "autonomous"],
-    "Memecoin": ["meme", "memecoin", "memecoins", "pump", "degen", "degens"],
-    "Solana": ["solana", "sol", "pumpfun", "pump.fun", "jupiter", "bonk"],
+    "AI / AI Agents": ["ai agents", "virtuals", "deai", "autonomous agents", "eliza"],
+    "Memecoin": ["memecoin", "memecoins", "degen", "degens"],
+    "Solana": ["solana", "pump.fun", "jupiter", "bonk"],
     "Base": ["base", "brett", "toshi", "buildonbase"],
     "RWA": ["rwa", "tokenization", "tokenized", "treasury", "ondo"],
     "DePIN": ["depin"],
-    "DeFi": ["defi", "yield", "perps", "dex", "liquidity", "lending"],
+    "DeFi": ["defi", "yield", "perps", "dex", "liquidity", "lending", "lsd"],
     "Restaking": ["restaking", "eigen", "eigenlayer"],
-    "Gaming": ["gaming", "gamefi", "play-to-earn", "p2e"],
+    "Gaming": ["gamefi", "play-to-earn", "p2e"],
 }
 
 BLACKLIST_TICKERS = {
@@ -91,7 +87,10 @@ BLACKLIST_TICKERS = {
     "$MSFT", "$GOOGL", "$GOOG", "$AMZN", "$META",
     "$NVDA", "$NFLX", "$AMD", "$INTC", "$PLTR",
     "$MSTR", "$COIN", "$HOOD", "$NKE", "$DIS",
-    "$K", "$M", "$B"
+    "$K", "$M", "$B", "$A", "$C", "$D", "$I", "$O", "$X", "$Z",
+    "$SPX", "$IXIC", "$RUT", "$DXY",
+    "$MU", "$EWY", "$GLD", "$SLV",
+    "$RAVE"
 }
 
 KNOWN_LARGE_CAPS = {
@@ -124,7 +123,24 @@ def get_tier_multiplier(tier):
     return {1: 3.0, 2: 2.0, 3: 1.0}.get(tier, 0.0)
 
 
+def is_promotional_tweet(text):
+    """Détecte les tweets promotionnels/annonces"""
+    promo_patterns = [
+        r'committing\s+\$',
+        r'launching\s+',
+        r'celebrate',
+        r'excited\s+to\s+announce',
+        r'proud\s+to\s+present',
+        r'we\s+(?:are\s+)?committed',
+        r'100k|1m\s+(?:in|incentive)',
+        r'weekly\s+(?:pot|bounty)',
+    ]
+    text_lower = (text or "").lower()
+    return any(re.search(pattern, text_lower) for pattern in promo_patterns)
+
+
 def analyze_sentiment(text):
+    """Analyse sentiment avec contexte pour tweets promotionnels"""
     text_lower = (text or "").lower()
     positive_count = sum(1 for word in POSITIVE_KEYWORDS if word in text_lower)
     negative_count = sum(1 for word in NEGATIVE_KEYWORDS if word in text_lower)
@@ -135,6 +151,10 @@ def analyze_sentiment(text):
     for pattern in BEARISH_PATTERNS:
         if pattern in text_lower:
             negative_count += 2
+
+    is_promo = is_promotional_tweet(text)
+    if is_promo and negative_count == 0:
+        positive_count = max(positive_count, 1)
 
     if positive_count + negative_count == 0:
         return 0.0
@@ -195,7 +215,6 @@ def fetch_latest_tweets(username, limit=20):
         if not text:
             continue
 
-        # Filtre simple retweet natif / texte commençant par RT.
         if text.strip().lower().startswith("rt @"):
             continue
 
@@ -262,8 +281,15 @@ def extract_contracts_and_links(text):
 
 
 def detect_narratives(text):
+    """Détecte les narratives avec word boundaries pour éviter le bruit"""
     text_l = (text or "").lower()
-    return [name for name, keywords in NARRATIVE_KEYWORDS.items() if any(k in text_l for k in keywords)]
+    narratives = []
+    for name, keywords in NARRATIVE_KEYWORDS.items():
+        for keyword in keywords:
+            if re.search(rf'\b{re.escape(keyword)}\b', text_l):
+                narratives.append(name)
+                break
+    return narratives
 
 
 def engagement_score(tweet):
@@ -303,36 +329,50 @@ def score_ticker(ticker, mentions):
             engagement_bonus += 5
         if m["engagement"] > 250:
             engagement_bonus += 10
-        if m["sentiment"] < -0.2:
-            risk_penalty += 15
+        if m["sentiment"] < -0.4:
+            risk_penalty += 20
 
     if ticker in KNOWN_LARGE_CAPS and author_count == 1:
-        risk_penalty += 25
+        risk_penalty += 30
 
     sentiment_factor = max(-0.5, min(1.0, avg_sentiment))
     raw = consensus_score + mention_score + min(tier_score / 2, 30) + min(contract_bonus, 25) + min(engagement_bonus, 15)
     raw = raw * (1 + max(0, sentiment_factor) * 0.35) - risk_penalty
 
     if author_count == 1:
-        raw = min(raw, 55)
+        tier_1_author = any(get_author_tier(a) == 1 for a in authors)
+        has_contract = any(m["has_contract_or_link"] for m in mentions)
+        if tier_1_author and has_contract:
+            raw = min(raw, 65)
+        else:
+            raw = min(raw, 45)
 
     return round(max(0, min(raw, 100)), 2)
 
 
-def classify_ticker(ticker, mentions):
+def classify_signal(ticker, mentions, score, avg_sentiment):
+    """Classifie un ticker dans une catégorie de signal"""
     authors = {m["author"] for m in mentions}
+    author_count = len(authors)
     has_contract = any(m["has_contract_or_link"] for m in mentions)
-    avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
+    has_tier1 = any(get_author_tier(a) == 1 for a in authors)
 
-    if avg_sentiment < -0.35:
-        return "Risque / sentiment négatif"
-    if ticker in KNOWN_LARGE_CAPS:
-        return "Large cap / coin connu"
-    if has_contract:
-        return "Possible nouveau gem / contrat détecté"
-    if len(authors) >= 2:
-        return "Ticker à surveiller"
-    return "Signal faible"
+    if avg_sentiment < -0.35 and any(m["sentiment"] < -0.4 for m in mentions):
+        return "red_flag"
+
+    if score >= 70 and avg_sentiment > 0.3 and (author_count >= 2 or (has_tier1 and has_contract)):
+        return "strong_buy"
+
+    if score >= 60 and avg_sentiment > 0.1 and author_count >= 2:
+        return "watchlist"
+
+    if score >= 60 and avg_sentiment > 0.1 and has_tier1:
+        return "watchlist"
+
+    if has_contract and has_tier1 and avg_sentiment > 0.0:
+        return "watchlist"
+
+    return "weak_signal"
 
 
 def build_report_data(tweets):
@@ -385,6 +425,7 @@ def build_report_data(tweets):
         score = score_ticker(ticker, mentions)
         avg_sentiment = sum(m["sentiment"] for m in mentions) / len(mentions)
         authors = sorted({m["author"] for m in mentions})
+        signal_type = classify_signal(ticker, mentions, score, avg_sentiment)
         ranked.append({
             "ticker": ticker,
             "score": score,
@@ -392,126 +433,129 @@ def build_report_data(tweets):
             "mention_count": len(mentions),
             "author_count": len(authors),
             "authors": authors,
-            "classification": classify_ticker(ticker, mentions),
+            "signal_type": signal_type,
             "mentions": mentions,
         })
 
     ranked.sort(key=lambda x: x["score"], reverse=True)
 
-    buy_signals = [
-        r for r in ranked
-        if r["score"] >= 60 and r["avg_sentiment"] > 0.15 and r["classification"] != "Large cap / coin connu"
-    ]
-
-    red_flags = [
-        r for r in ranked
-        if r["avg_sentiment"] < -0.35 or any(
-            m["author"] in ANTI_SCAM_ACCOUNTS and m["sentiment"] < -0.2 for m in r["mentions"]
-        )
-    ]
+    strong_buy = [r for r in ranked if r["signal_type"] == "strong_buy"]
+    watchlist = [r for r in ranked if r["signal_type"] == "watchlist"]
+    red_flags = [r for r in ranked if r["signal_type"] == "red_flag"]
+    weak = [r for r in ranked if r["signal_type"] == "weak_signal"]
 
     return {
         "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         "tweets_analyzed": len(tweets),
         "ignored_list_tweets": ignored_list_tweets,
         "narratives": narrative_counter.most_common(10),
-        "ranked": ranked,
-        "buy_signals": buy_signals,
+        "strong_buy": strong_buy,
+        "watchlist": watchlist,
         "red_flags": red_flags,
+        "weak_signals": weak,
+        "ranked": ranked,
         "new_contracts": new_contracts,
     }
 
 
 def build_text_report(data):
     lines = []
-    lines.append("Crypto X Trend Report V7 - Trend + Sentiment + Exports")
-    lines.append("=" * 72)
+    lines.append("Crypto X Trend Report V8 - Narratives + Blacklist Strict + Categories")
+    lines.append("=" * 80)
     lines.append(f"Date UTC : {data['generated_at_utc']}")
     lines.append(f"Tweets analysés après déduplication : {data['tweets_analyzed']}")
     lines.append(f"Tweets ignorés car listes de tickers : {data['ignored_list_tweets']}")
     lines.append("")
 
-    lines.append("TOP NARRATIVES")
-    lines.append("-" * 72)
+    lines.append("TOP NARRATIVES (word boundaries, pas de bruit)")
+    lines.append("-" * 80)
     if data["narratives"]:
         for narrative, count in data["narratives"]:
-            lines.append(f"- {narrative}: {count} mentions")
+            lines.append(f"  {narrative}: {count} mentions")
     else:
-        lines.append("Aucune narrative forte détectée.")
+        lines.append("  Aucune narrative forte détectée.")
+    lines.append("")
 
-    lines.append("\nSIGNAUX D'ACHAT FORTS")
-    lines.append("-" * 72)
-    if data["buy_signals"]:
-        for r in data["buy_signals"][:10]:
+    lines.append("SIGNAUX D'ACHAT FORTS (Score 70+, Sentiment > 0.3, 2+ comptes ou Tier1 + contrat)")
+    lines.append("-" * 80)
+    if data["strong_buy"]:
+        for r in data["strong_buy"][:10]:
             lines.append(
-                f"{r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
-                f"{r['classification']} — {r['mention_count']} mentions — {r['author_count']} comptes: "
+                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
+                f"{r['mention_count']} mentions — {r['author_count']} comptes: "
                 f"{', '.join('@' + a for a in r['authors'])}"
             )
-            for m in r["mentions"][:3]:
-                lines.append(f"  • @{m['author']}: {m['text']}")
+            for m in r["mentions"][:2]:
+                lines.append(f"    @{m['author']}: {m['text']}")
                 lines.append(f"    {m['url']}")
             lines.append("")
     else:
-        lines.append("Aucun signal d'achat fort détecté dans cette fenêtre.")
+        lines.append("  Aucun signal d'achat fort détecté.")
+    lines.append("")
 
-    lines.append("\nRED FLAGS & ALERTES DE RISQUE")
-    lines.append("-" * 72)
+    lines.append("WATCHLIST PRIORITAIRE (Score 60+, Sentiment > 0.1, 2+ comptes ou Tier1)")
+    lines.append("-" * 80)
+    if data["watchlist"]:
+        for r in data["watchlist"][:15]:
+            lines.append(
+                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
+                f"{r['mention_count']} mentions — {r['author_count']} comptes: "
+                f"{', '.join('@' + a for a in r['authors'])}"
+            )
+            lines.append(f"    Statut: À surveiller, vérifier techniquement avant entrée")
+        lines.append("")
+    else:
+        lines.append("  Aucun ticker en watchlist.")
+    lines.append("")
+
+    lines.append("RED FLAGS & ALERTES SÉVÈRES (Vraiment négatif)")
+    lines.append("-" * 80)
     if data["red_flags"]:
         for r in data["red_flags"][:10]:
             lines.append(
-                f"{r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
-                f"{r['classification']} — {r['mention_count']} mentions"
+                f"  {r['ticker']} — Score {r['score']}/100 — Sentiment {r['avg_sentiment']} — "
+                f"Raison: Mots négatifs détectés (scam, hack, rug, honeypot, etc)"
             )
-            for m in r["mentions"][:2]:
-                lines.append(f"  • @{m['author']}: {m['text']}")
-                lines.append(f"    {m['url']}")
+            for m in r["mentions"][:1]:
+                lines.append(f"    @{m['author']}: {m['text']}")
             lines.append("")
     else:
-        lines.append("Aucune alerte de risque détectée.")
+        lines.append("  Aucune alerte sévère détectée.")
+    lines.append("")
 
-    lines.append("\nTOP SIGNAUX TICKERS")
-    lines.append("-" * 72)
-    if data["ranked"]:
-        for r in data["ranked"][:15]:
-            label = "+" if r["avg_sentiment"] > 0.2 else "-" if r["avg_sentiment"] < -0.2 else "Neutre"
-            lines.append(
-                f"{r['ticker']} — Score {r['score']}/100 — {label} — {r['classification']} — "
-                f"{r['mention_count']} mentions — {r['author_count']} comptes"
-            )
-    else:
-        lines.append("Aucun cashtag crypto détecté.")
-
-    lines.append("\nNOUVEAUX CONTRATS / LIENS DEX / PUMPFUN")
-    lines.append("-" * 72)
+    lines.append("CONTRATS DÉTECTÉS / LIENS DEX / PUMP.FUN")
+    lines.append("-" * 80)
     if data["new_contracts"]:
         for item in data["new_contracts"][:10]:
             sentiment_indicator = "POSITIF" if item["sentiment"] > 0 else "NEGATIF" if item["sentiment"] < 0 else "NEUTRE"
-            lines.append(f"@{item['author']} [{sentiment_indicator}]: {item['text']}")
+            lines.append(f"  @{item['author']} [{sentiment_indicator}]: {item['text']}")
             if item["contracts"]:
-                lines.append(f"  Contrats EVM: {', '.join(item['contracts'][:2])}")
+                lines.append(f"    EVM: {', '.join(item['contracts'][:2])}")
             if item["sol_contracts"]:
-                lines.append(f"  Contrats Solana possibles: {', '.join(item['sol_contracts'][:2])}")
-            lines.append(f"  {item['url']}\n")
+                lines.append(f"    Solana: {', '.join(item['sol_contracts'][:2])}")
+            lines.append(f"    {item['url']}")
+            lines.append("")
     else:
-        lines.append("Aucun contrat ou lien DEX/Pump.fun détecté.")
+        lines.append("  Aucun contrat ou lien DEX détecté.")
+    lines.append("")
 
-    lines.append("\nNOTES TECHNIQUES V7")
-    lines.append("-" * 72)
-    lines.append("- Comptes normalisés en minuscules pour éviter les erreurs de casse.")
-    lines.append("- Export automatique TXT, JSON et CSV pour suivi historique/backtest.")
-    lines.append("- Score basé sur consensus, tier, sentiment, engagement et présence de contrat/lien DEX.")
-    lines.append("- Les signaux d'achat exigent score élevé, sentiment positif et exclusion des large caps connues.")
-    lines.append("- Ce rapport n'est pas un conseil financier : il détecte uniquement des signaux sociaux.")
+    lines.append("NOTES TECHNIQUES V8")
+    lines.append("-" * 80)
+    lines.append("  Narratives détectées avec word boundaries (\\b) pour éliminer le bruit")
+    lines.append("  Blacklist enrichie: indices boursiers, actions, ETF, lettres seules")
+    lines.append("  Sentiment: plus nuancé pour tweets promotionnels, moins de faux positifs")
+    lines.append("  Catégories: Strong buy (70+, strict), Watchlist (60+, à vérifier), Red flags (vrais signaux négatifs)")
+    lines.append("  Score plafonné à 45 pour single-account sauf Tier1 + contrat (plafonné 65)")
+    lines.append("  Ce rapport n'est pas un conseil: détecte les signaux sociaux uniquement.")
     return "\n".join(lines)
 
 
 def save_outputs(data, report):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_{stamp}.txt")
-    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_{stamp}.json")
-    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_{stamp}.csv")
+    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v8_{stamp}.txt")
+    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v8_{stamp}.json")
+    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v8_{stamp}.csv")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(report)
@@ -521,11 +565,11 @@ def save_outputs(data, report):
 
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ticker", "score", "avg_sentiment", "mention_count", "author_count", "classification", "authors"])
+        writer.writerow(["ticker", "score", "sentiment", "mentions", "author_count", "signal_type", "authors"])
         for r in data["ranked"]:
             writer.writerow([
                 r["ticker"], r["score"], r["avg_sentiment"], r["mention_count"],
-                r["author_count"], r["classification"], ", ".join(r["authors"])
+                r["author_count"], r["signal_type"], ", ".join(r["authors"])
             ])
 
     return txt_path, json_path, csv_path
@@ -572,10 +616,13 @@ def main():
     print("\n" + "=" * 80)
     print(report)
     print("=" * 80)
-    print(f"Rapports sauvegardés : {txt_path}, {json_path}, {csv_path}")
+    print(f"Rapports sauvegardés:")
+    print(f"  TXT: {txt_path}")
+    print(f"  JSON: {json_path}")
+    print(f"  CSV: {csv_path}")
 
     if SEND_EMAIL_REPORT:
-        send_email("Crypto X Trend Report V7", report)
+        send_email("Crypto X Trend Report V8", report)
         print("Email envoyé.")
     else:
         print("Envoi email désactivé: SEND_EMAIL_REPORT=false")
