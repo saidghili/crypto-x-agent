@@ -130,9 +130,13 @@ def fetch_latest_tweets(username, limit=20):
 def extract_tickers(text):
     tickers = re.findall(r"\$[A-Za-z]{2,10}", text)
 
-    blacklist = {
-        "$USD", "$USDT", "$USDC", "$BTC", "$ETH"
-    }
+blacklist = {
+    "$USD", "$USDT", "$USDC", "$BTC", "$ETH",
+    "$SPY", "$QQQ", "$DIA", "$IWM",
+    "$XAU", "$XAG", "$GOLD", "$SILVER",
+    "$ORCL", "$SMCI", "$CPB", "$TSLA", "$AAPL",
+    "$MSFT", "$GOOGL", "$AMZN", "$META", "$NVDA"
+}
 
     return [t.upper() for t in tickers if t.upper() not in blacklist]
 
