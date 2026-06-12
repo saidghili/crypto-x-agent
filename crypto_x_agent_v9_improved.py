@@ -583,7 +583,7 @@ def build_report_data(tweets):
 
 def build_text_report(data):
     lines = []
-    lines.append("Crypto X Trend Report V8.2 - Stable Production")
+    lines.append("Crypto X Trend Report V9.0 - Stable Production")
     lines.append("=" * 80)
     lines.append(f"Date UTC : {data['generated_at_utc']}")
     lines.append(f"Tweets analysés : {data['tweets_analyzed']}")
@@ -731,7 +731,7 @@ def main():
     print(f"  {csv_path}")
 
     if SEND_EMAIL_REPORT:
-        send_email("Crypto X Trend Report V8.2", report)
+        send_email("Crypto X Trend Report V9.0", report)
 
 
 if __name__ == "__main__":
