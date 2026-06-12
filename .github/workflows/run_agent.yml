@@ -33,12 +33,32 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SEND_EMAIL_REPORT: "true"
+          OUTPUT_DIR: reports
         run: python crypto_x_agent_v9_improved.py
+
+      - name: Send Email with Report
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.EMAIL_FROM }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "🚀 Crypto X Agent Report - $(date +%Y-%m-%d)"
+          to: ${{ secrets.EMAIL_TO }}
+          from: ${{ secrets.EMAIL_FROM }}
+          body: |
+            Rapport d'analyse Crypto X Agent généré automatiquement.
+            
+            Vérifiez les artifacts sur GitHub Actions pour les rapports complets (txt, json, csv).
+            
+            Exécution: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Upload reports
         uses: actions/upload-artifact@v3
         if: always()
         with:
-          name: crypto-reports
+          name: crypto-reports-${{ github.run_number }}
           path: reports/
           retention-days: 30
