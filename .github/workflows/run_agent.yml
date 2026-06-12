@@ -5,19 +5,16 @@ on:
     - cron: '0 9 * * *'
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   run-agent:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.11'
 
@@ -43,20 +40,20 @@ jobs:
           SEND_EMAIL_REPORT: "true"
           OUTPUT_DIR: reports
         run: |
-          echo "Starting Crypto X Agent..."
+          echo "Starting Crypto X Agent V9..."
           python crypto_x_agent_v9_improved.py || echo "Script completed with status: $?"
           echo "Listing reports directory:"
           ls -la reports/ || echo "No reports directory"
 
       - name: Send Email with Report
         if: always()
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@v3.13.0
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.EMAIL_FROM }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "🚀 Crypto X Agent Report"
+          subject: "🚀 Crypto X Agent Report - Daily Analysis"
           to: ${{ secrets.EMAIL_TO }}
           from: ${{ secrets.EMAIL_FROM }}
           body: |
@@ -67,7 +64,7 @@ jobs:
             Lien: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Upload reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         if: always()
         with:
           name: crypto-reports-${{ github.run_number }}
