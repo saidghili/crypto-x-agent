@@ -645,9 +645,9 @@ def build_text_report(data):
 def save_outputs(data, report):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.txt")
-    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v82_{stamp}.json")
-    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v82_{stamp}.csv")
+    txt_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v9_{stamp}.txt")
+    json_path = os.path.join(OUTPUT_DIR, f"crypto_x_report_v9_{stamp}.json")
+    csv_path = os.path.join(OUTPUT_DIR, f"crypto_x_ranked_v9_{stamp}.csv")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(report)
