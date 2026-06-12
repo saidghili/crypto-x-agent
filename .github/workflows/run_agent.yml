@@ -56,7 +56,7 @@ jobs:
             Exécution: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Upload reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: crypto-reports-${{ github.run_number }}
