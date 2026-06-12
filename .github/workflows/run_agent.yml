@@ -1,0 +1,44 @@
+name: Run Crypto X Agent
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install textblob
+
+      - name: Run Crypto X Agent
+        env:
+          TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: python crypto_x_agent_v9_improved.py
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: crypto-reports
+          path: reports/
+          retention-days: 30
