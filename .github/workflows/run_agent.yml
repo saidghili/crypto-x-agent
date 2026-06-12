@@ -33,7 +33,6 @@ jobs:
       - name: Run Crypto X Agent
         env:
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
@@ -41,12 +40,9 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SEND_EMAIL_REPORT: "true"
           OUTPUT_DIR: reports
-        run: |
-          echo "Starting Crypto X Agent V9..."
-          python crypto_x_agent_v9_improved.py
-          echo "Done! Check your email for the report."
+        run: python crypto_x_agent_v9_improved.py
 
-      - name: Upload reports to artifacts
+      - name: Upload reports
         uses: actions/upload-artifact@v4.3.1
         if: always()
         with:
