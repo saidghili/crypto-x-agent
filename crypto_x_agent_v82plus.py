@@ -17,7 +17,7 @@ except ImportError:
     OPENAI_AVAILABLE = False
     print("WARNING: openai library not installed. Install with: pip install openai")
 
-print("VERSION V8.2+ - CACHING + PUMP DETECTION - CRYPTO X AGENT")
+print("VERSION V8.3 - SLIDING WINDOW + CACHING + PUMP DETECTION")
 
 TWITTERAPI_KEY = os.getenv("TWITTERAPI_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -29,11 +29,12 @@ SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.laposte.net")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "reports")
-MAX_TWEETS_PER_ACCOUNT = int(os.getenv("MAX_TWEETS_PER_ACCOUNT", "20"))
+MAX_TWEETS_PER_ACCOUNT = int(os.getenv("MAX_TWEETS_PER_ACCOUNT", "100"))
+FETCH_TWEETS_PER_RUN = int(os.getenv("FETCH_TWEETS_PER_RUN", "20"))
 SEND_EMAIL_REPORT = os.getenv("SEND_EMAIL_REPORT", "false").lower() == "true"
 USE_GPT_SYNTHESIS = os.getenv("USE_GPT_SYNTHESIS", "true").lower() == "true"
 GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4-turbo")
-CACHE_DB = "coingecko_cache.db"
+CACHE_DB = "crypto_cache.db"
 CACHE_TTL_HOURS = 6  # Cache valable 6h
 
 ACCOUNTS_LIST = [
@@ -142,6 +143,23 @@ def init_cache_db():
                 timestamp REAL
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tweets_cache (
+                account TEXT,
+                tweet_id TEXT,
+                text TEXT,
+                created_at TEXT,
+                cached_at REAL,
+                PRIMARY KEY (account, tweet_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS run_metadata (
+                account TEXT PRIMARY KEY,
+                last_run_time TEXT,
+                timestamp REAL
+            )
+        """)
         conn.commit()
         conn.close()
         print(f"Cache DB initialized: {CACHE_DB}")
@@ -170,6 +188,58 @@ def get_cached_market_data(ticker_symbol):
     except Exception as e:
         return None
 
+
+def cache_market_data(ticker_symbol, data):
+
+def get_last_run_time_for_account(account):
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_run_time FROM run_metadata WHERE account = ?", (account,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except:
+        return None
+
+def save_run_time_for_account(account, timestamp):
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO run_metadata (account, last_run_time, timestamp) VALUES (?, ?, ?)", (account, timestamp, datetime.now(timezone.utc).timestamp()))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def cache_tweets(account, tweets):
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        cursor = conn.cursor()
+        now = datetime.now(timezone.utc).timestamp()
+        for tweet in tweets:
+            cursor.execute("INSERT OR REPLACE INTO tweets_cache (account, tweet_id, text, created_at, cached_at) VALUES (?, ?, ?, ?, ?)", (account, tweet.get("id"), tweet.get("text"), tweet.get("created_at"), now))
+        cursor.execute("DELETE FROM tweets_cache WHERE account = ? AND rowid NOT IN (SELECT rowid FROM tweets_cache WHERE account = ? ORDER BY created_at DESC LIMIT ?)", (account, account, MAX_TWEETS_PER_ACCOUNT))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def get_cached_tweets(account, limit=None):
+    if limit is None:
+        limit = MAX_TWEETS_PER_ACCOUNT
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT tweet_id, text, created_at FROM tweets_cache WHERE account = ? ORDER BY created_at DESC LIMIT ?", (account, limit))
+        results = cursor.fetchall()
+        conn.close()
+        tweets = []
+        for row in results:
+            tweets.append({"id": row[0], "text": row[1], "created_at": row[2]})
+        return tweets
+    except:
+        return []
 
 def cache_market_data(ticker_symbol, data):
     """Sauvegarde les données en cache"""
@@ -299,7 +369,7 @@ def analyze_sentiment(text):
     return max(-1.0, min(1.0, sentiment))
 
 
-def fetch_latest_tweets(username, limit=20):
+def fetch_latest_tweets(username, limit=20, since_time=None):
     url = "https://api.twitterapi.io/twitter/user/last_tweets"
     headers = {"X-API-Key": TWITTERAPI_KEY}
     params = {
@@ -828,37 +898,41 @@ def send_email(subject, body):
         return False
 
 
+
 def main():
     if not TWITTERAPI_KEY:
         raise ValueError("TWITTERAPI_KEY missing")
-
     init_cache_db()
-
-    print(f"Accounts: {len(ACCOUNTS_LIST)}")
-
+    current_run_time = datetime.now(timezone.utc).isoformat()
+    processed_accounts = []
     all_tweets = []
+    print(f"Accounts: {len(ACCOUNTS_LIST)}")
+    print(f"Fetch per run: {FETCH_TWEETS_PER_RUN}")
+    print(f"Sliding cache: {MAX_TWEETS_PER_ACCOUNT}")
     for account in ACCOUNTS_LIST:
-        tweets = fetch_latest_tweets(account, limit=MAX_TWEETS_PER_ACCOUNT)
-        print(f"  {account}: {len(tweets)} tweets")
-        all_tweets.extend(tweets)
-
-    print(f"\nTotal tweets: {len(all_tweets)}")
+        last_run_time = get_last_run_time_for_account(account)
+        print(f"@{account} (last: {last_run_time or 'none'})")
+        new_tweets = fetch_latest_tweets(account, limit=FETCH_TWEETS_PER_RUN, since_time=last_run_time)
+        cache_tweets(account, new_tweets)
+        sliding_window = get_cached_tweets(account, limit=MAX_TWEETS_PER_ACCOUNT)
+        sliding_window = deduplicate_tweets(sliding_window)
+        print(f"  New: {len(new_tweets)} | Sliding: {len(sliding_window)}")
+        all_tweets.extend(sliding_window)
+        processed_accounts.append(account)
+    all_tweets = deduplicate_tweets(all_tweets)
+    print(f"Total: {len(all_tweets)}")
     print("Generating report...\n")
-
     data = build_report_data(all_tweets)
     report = build_text_report(data)
     txt_path, json_path, csv_path = save_outputs(data, report)
-
+    for account in processed_accounts:
+        save_run_time_for_account(account, current_run_time)
     print("=" * 80)
     print(report)
     print("=" * 80)
-    print(f"\nSaved to:")
-    print(f"  {txt_path}")
-    print(f"  {json_path}")
-    print(f"  {csv_path}")
-
+    print(f"Saved: {txt_path}")
     if SEND_EMAIL_REPORT:
-        send_email("Crypto X Trend Report V8.2+", report)
+        send_email("Crypto X Trend Report V8.3", report)
 
 
 if __name__ == "__main__":
