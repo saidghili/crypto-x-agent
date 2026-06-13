@@ -1,0 +1,86 @@
+name: Crypto X Agent V10
+
+on:
+  schedule:
+    - cron: "10 10 * * *"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  crypto-x-v10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Restore Crypto X cache database
+        uses: actions/cache@v4
+        with:
+          path: crypto_cache.db
+          key: crypto-x-agent-v10-cache-${{ github.run_id }}
+          restore-keys: |
+            crypto-x-agent-v10-cache-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Crypto X Agent V10
+        env:
+          TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OUTPUT_DIR: ./reports
+          CACHE_DB: crypto_cache.db
+          FETCH_TWEETS_PER_RUN: ${{ vars.FETCH_TWEETS_PER_RUN || '20' }}
+          MAX_TWEETS_PER_ACCOUNT: ${{ vars.MAX_TWEETS_PER_ACCOUNT || '100' }}
+          CACHE_TTL_HOURS: ${{ vars.CACHE_TTL_HOURS || '6' }}
+          USE_GPT_SYNTHESIS: ${{ vars.USE_GPT_SYNTHESIS || 'true' }}
+          GPT_MODEL: ${{ vars.GPT_MODEL || 'gpt-4-turbo' }}
+          GPT_MAX_CANDIDATES: ${{ vars.GPT_MAX_CANDIDATES || '12' }}
+          SEND_EMAIL_REPORT: ${{ vars.SEND_EMAIL_REPORT || 'false' }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: python crypto_x_agent_v10.py
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-x-v10-reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 30
+          compression-level: 9
+          if-no-files-found: warn
+
+      - name: Upload cache database snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-x-v10-cache-db-${{ github.run_number }}
+          path: crypto_cache.db
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: List generated files
+        if: always()
+        run: |
+          echo "Generated reports:"
+          ls -lh reports/ 2>/dev/null || echo "No reports directory"
+          echo "Cache database:"
+          ls -lh crypto_cache.db 2>/dev/null || echo "No cache database"
