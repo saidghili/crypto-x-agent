@@ -40,7 +40,7 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SEND_EMAIL_REPORT: "true"
           OUTPUT_DIR: reports
-        run: python crypto_x_agent_v82plus.py
+        run: python crypto_x_agent_v8.3.py
 
       - name: Upload reports
         uses: actions/upload-artifact@v4.3.1
