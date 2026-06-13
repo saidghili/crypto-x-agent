@@ -126,6 +126,15 @@ SIGNAL PERFORMANCE BACKTEST
 Error: {e}
 "
 
+
+def classify_performance(perf_pct):
+    if perf_pct is None: return "pending"
+    if perf_pct >= 20: return "true_positive_strong"
+    if perf_pct >= 7: return "true_positive"
+    if perf_pct <= -20: return "false_positive_strong"
+    if perf_pct <= -7: return "false_positive"
+    return "neutral"
+
 def main():
     print("V8.4 initialized with signal tracking")
     init_cache_db()
