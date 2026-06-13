@@ -50,7 +50,7 @@ jobs:
           USE_GPT_SYNTHESIS: ${{ vars.USE_GPT_SYNTHESIS || 'true' }}
           GPT_MODEL: ${{ vars.GPT_MODEL || 'gpt-4-turbo' }}
           GPT_MAX_CANDIDATES: ${{ vars.GPT_MAX_CANDIDATES || '12' }}
-          SEND_EMAIL_REPORT: ${{ vars.SEND_EMAIL_REPORT || 'false' }}
+          SEND_EMAIL_REPORT: ${{ vars.SEND_EMAIL_REPORT || 'true' }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
