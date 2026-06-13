@@ -73,7 +73,7 @@ def calculate_return(signal_price, signal_time, target_hours, price_history):
         return None
 
 
-def backtest_signals(reports, lookback_hours=72):
+def backtest_signals(reports, reports_dir, lookback_hours=72):
     all_signals = []
     verdict_results = defaultdict(list)
     signal_type_results = defaultdict(list)
@@ -154,7 +154,8 @@ def backtest_signals(reports, lookback_hours=72):
         "win_rate": len(winners) / max(1, len(known)) * 100,
         "all_signals": all_signals,
     }
-    output_path = os.path.join(args.reports, "backtest_results.json")
+    os.makedirs(reports_dir, exist_ok=True)
+    output_path = os.path.join(reports_dir, "backtest_results.json")
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved: {output_path}")
@@ -175,4 +176,4 @@ if __name__ == "__main__":
     parser.add_argument("--lookback", default="72h", help="Lookback period, e.g. 24h, 72h, 7d")
     args = parser.parse_args()
     loaded_reports = load_all_reports(args.reports)
-    backtest_signals(loaded_reports, parse_lookback(args.lookback))
+    backtest_signals(loaded_reports, args.reports, parse_lookback(args.lookback))
