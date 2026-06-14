@@ -2,7 +2,8 @@ name: Crypto X Agent V10
 
 on:
   schedule:
-    - cron: "10 10 * * *"
+    # GitHub cron uses UTC. 10:00 UTC = 12:00 Paris during summer time.
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 env:
