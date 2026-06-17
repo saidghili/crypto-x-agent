@@ -1,15 +1,16 @@
-name: Run Crypto X Agent
+name: Run Crypto X Agent Legacy V8.3
 
 on:
-  schedule:
-    - cron: '0 9 * * *'
   workflow_dispatch:
+
+# Legacy V8.3 workflow kept for manual comparison only.
+# Daily automatic execution is handled by .github/workflows/crypto_x_agent_v10.yml.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  run-agent:
+  run-agent-legacy:
     runs-on: ubuntu-latest
 
     steps:
@@ -30,7 +31,7 @@ jobs:
       - name: Create reports directory
         run: mkdir -p reports
 
-      - name: Run Crypto X Agent
+      - name: Run Crypto X Agent Legacy V8.3
         env:
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
@@ -42,11 +43,11 @@ jobs:
           OUTPUT_DIR: reports
         run: python crypto_x_agent_v8.3.py
 
-      - name: Upload reports
+      - name: Upload legacy reports
         uses: actions/upload-artifact@v4.3.1
         if: always()
         with:
-          name: crypto-reports-${{ github.run_number }}
+          name: crypto-v83-legacy-reports-${{ github.run_number }}
           path: reports/
           retention-days: 30
           if-no-files-found: ignore
