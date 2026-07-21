@@ -1,12 +1,9 @@
 name: Crypto X Agent V10
 
 on:
-  schedule:
-    # GitHub cron uses UTC. These two entries cover Paris summer/winter time.
-    # A guard step below runs the agent only when Europe/Paris local hour is 08.
-    - cron: "0 6 * * *"
-    - cron: "0 7 * * *"
   workflow_dispatch:
+
+# Automatic schedule suspended. Run manually from GitHub Actions when needed.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -17,32 +14,18 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Check Paris schedule window
-        id: paris_time
-        run: |
-          paris_hour=$(TZ=Europe/Paris date +%H)
-          echo "Paris hour is ${paris_hour}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$paris_hour" = "08" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Checkout repository
-        if: steps.paris_time.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Set up Python 3.11
-        if: steps.paris_time.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Restore Crypto X cache database
-        if: steps.paris_time.outputs.should_run == 'true'
         uses: actions/cache@v4
         with:
           path: crypto_cache.db
@@ -51,13 +34,11 @@ jobs:
             crypto-x-agent-v10-cache-
 
       - name: Install dependencies
-        if: steps.paris_time.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Crypto X Agent V10
-        if: steps.paris_time.outputs.should_run == 'true'
         env:
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -78,7 +59,7 @@ jobs:
         run: python crypto_x_agent_v10.py
 
       - name: Upload reports
-        if: always() && steps.paris_time.outputs.should_run == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: crypto-x-v10-reports-${{ github.run_number }}
@@ -88,7 +69,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload cache database snapshot
-        if: always() && steps.paris_time.outputs.should_run == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: crypto-x-v10-cache-db-${{ github.run_number }}
@@ -97,7 +78,7 @@ jobs:
           if-no-files-found: warn
 
       - name: List generated files
-        if: always() && steps.paris_time.outputs.should_run == 'true'
+        if: always()
         run: |
           echo "Generated reports:"
           ls -lh reports/ 2>/dev/null || echo "No reports directory"
